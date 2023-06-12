@@ -1,8 +1,9 @@
 use core::fmt::Debug;
 use std::rc::Rc;
 
-use crate::marks::MarkSet;
-use crate::{ObjId, Prop, ReadDoc, Value};
+use crate::block::Block;
+use crate::marks::RichText;
+use crate::{Cursor, ObjId, Prop, ReadDoc, Value};
 
 use super::{Patch, PatchAction};
 use crate::{marks::Mark, sequence_tree::SequenceTree};
@@ -10,7 +11,7 @@ use crate::{marks::Mark, sequence_tree::SequenceTree};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PatchBuilder {
     patches: Vec<Patch>,
-    last_mark_set: Option<Rc<MarkSet>>, // keep this around for a quick pointer equality test
+    last_mark_set: Option<Rc<RichText>>, // keep this around for a quick pointer equality test
 }
 
 impl PatchBuilder {
@@ -39,8 +40,14 @@ impl PatchBuilder {
         index: usize,
         tagged_value: (Value<'_>, ObjId),
         conflict: bool,
-        marks: Option<Rc<MarkSet>>,
+        marks: Option<Rc<RichText>>,
+        block_id: Option<Cursor>,
     ) {
+        if let Some(block) = tagged_value.0.to_block() {
+            if let Some(cursor) = block_id {
+                return self.split_block(doc, obj, index, block, cursor, conflict);
+            }
+        }
         let value = (tagged_value.0.to_owned(), tagged_value.1, conflict);
         if let Some(PatchAction::Insert {
             index: tail_index,
@@ -78,7 +85,7 @@ impl PatchBuilder {
         obj: ObjId,
         index: usize,
         value: &str,
-        marks: Option<Rc<MarkSet>>,
+        marks: Option<Rc<RichText>>,
     ) {
         if let Some(PatchAction::SpliceText {
             index: tail_index,
@@ -110,7 +117,11 @@ impl PatchBuilder {
         obj: ObjId,
         index: usize,
         length: usize,
+        block_id: Option<Cursor>,
     ) {
+        if let Some(block) = block_id {
+            return self.join_block(doc, obj, index, block);
+        }
         match maybe_append(&mut self.patches, &obj) {
             Some(PatchAction::SpliceText {
                 index: tail_index,
@@ -172,7 +183,15 @@ impl PatchBuilder {
         prop: Prop,
         tagged_value: (Value<'_>, ObjId),
         conflict: bool,
+        block_id: Option<Cursor>,
     ) {
+        if let Some(block) = tagged_value.0.to_block() {
+            if let Some(cursor) = block_id {
+                if let Prop::Seq(index) = prop {
+                    return self.update_block(doc, obj, index, block, cursor, conflict);
+                }
+            }
+        }
         if let Some(path) = self.get_path(doc, &obj) {
             let value = (tagged_value.0.to_owned(), tagged_value.1);
             let action = match prop {
@@ -243,6 +262,72 @@ impl PatchBuilder {
         } else if let Some(path) = self.get_path(doc, &obj) {
             let action = PatchAction::Conflict { prop };
             self.push(Patch { obj, path, action });
+        }
+    }
+
+    fn split_block<R: ReadDoc>(
+        &mut self,
+        doc: &R,
+        obj: ObjId,
+        index: usize,
+        block: Block,
+        cursor: Cursor,
+        conflict: bool,
+    ) {
+        if let Some(path) = self.get_path(doc, &obj) {
+            let name = block.name;
+            let parents = block.parents;
+            let action = PatchAction::SplitBlock {
+                index,
+                name,
+                parents,
+                cursor,
+                conflict,
+            };
+            self.push(Patch { obj, path, action })
+        }
+    }
+
+    fn join_block<R: ReadDoc>(&mut self, doc: &R, obj: ObjId, index: usize, cursor: Cursor) {
+        if let Some(path) = self.get_path(doc, &obj) {
+            let action = PatchAction::JoinBlock { index, cursor };
+            self.push(Patch { obj, path, action })
+        }
+    }
+
+    pub(crate) fn update_block<R: ReadDoc>(
+        &mut self,
+        doc: &R,
+        obj: ObjId,
+        index: usize,
+        block: Block,
+        cursor: Cursor,
+        conflict: bool,
+    ) {
+        match maybe_append(&mut self.patches, &obj) {
+            Some(PatchAction::SplitBlock {
+                cursor: tail_cursor,
+                name,
+                parents,
+                ..
+            }) if *tail_cursor == cursor => {
+                *name = block.name;
+                *parents = block.parents;
+                return;
+            }
+            _ => {}
+        }
+        if let Some(path) = self.get_path(doc, &obj) {
+            let name = block.name;
+            let parents = block.parents;
+            let action = PatchAction::UpdateBlock {
+                index,
+                name,
+                parents,
+                cursor,
+                conflict,
+            };
+            self.push(Patch { obj, path, action })
         }
     }
 }

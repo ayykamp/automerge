@@ -1,5 +1,6 @@
 use std::ops::RangeBounds;
 
+use crate::block::Block;
 use crate::exid::ExId;
 use crate::iter::{Keys, ListRange, MapRange, Values};
 use crate::marks::{ExpandMark, Mark};
@@ -403,6 +404,36 @@ impl<'a> Transactable for Transaction<'a> {
         expand: ExpandMark,
     ) -> Result<(), AutomergeError> {
         self.do_tx(|tx, doc, hist| tx.unmark(doc, hist, obj.as_ref(), name, start, end, expand))
+    }
+
+    fn split_block<S: Into<String>, O: AsRef<ExId>, P: IntoIterator<Item = S>>(
+        &mut self,
+        obj: O,
+        index: usize,
+        name: S,
+        parents: P,
+    ) -> Result<Cursor, AutomergeError> {
+        let value = Block::new(name, parents);
+        self.do_tx(|tx, doc, hist| tx.split_block(doc, hist, obj.as_ref(), index, value))
+    }
+
+    fn join_block<O: AsRef<ExId>>(
+        &mut self,
+        obj: O,
+        block_id: &Cursor,
+    ) -> Result<(), AutomergeError> {
+        self.do_tx(|tx, doc, hist| tx.join_block(doc, hist, obj.as_ref(), block_id))
+    }
+
+    fn update_block<S: Into<String>, O: AsRef<ExId>, P: IntoIterator<Item = S>>(
+        &mut self,
+        obj: O,
+        block_id: &Cursor,
+        name: S,
+        parents: P,
+    ) -> Result<(), AutomergeError> {
+        let value = Block::new(name, parents);
+        self.do_tx(|tx, doc, hist| tx.update_block(doc, hist, obj.as_ref(), block_id, value))
     }
 
     fn base_heads(&self) -> Vec<ChangeHash> {

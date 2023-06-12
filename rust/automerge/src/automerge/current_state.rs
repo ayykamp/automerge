@@ -4,9 +4,9 @@ use std::rc::Rc;
 use itertools::Itertools;
 
 use crate::{
-    marks::{MarkSet, MarkStateMachine},
+    marks::{RichText, RichTextStateMachine},
     patches::{PatchLog, TextRepresentation},
-    types::{Key, ListEncoding, ObjId, Op, OpId},
+    types::{Block, Key, ListEncoding, ObjId, Op, OpId},
     Automerge, ObjType, OpType, Value,
 };
 
@@ -14,14 +14,14 @@ use crate::{
 struct TextSpan {
     text: String,
     start: usize,
-    marks: Option<Rc<MarkSet>>,
+    marks: Option<Rc<RichText>>,
 }
 
 #[derive(Debug, Default)]
 struct TextState<'a> {
     len: usize,
     spans: Vec<TextSpan>,
-    marks: MarkStateMachine<'a>,
+    marks: RichTextStateMachine<'a>,
 }
 
 impl<'a> TextState<'a> {
@@ -36,6 +36,33 @@ impl<'a> TextState<'a> {
             });
         }
         self.len += len;
+    }
+
+    fn push_block(&mut self, block: Block) {
+        let marks;
+        if let Some(last) = self.spans.last_mut() {
+            if last.text.is_empty() {
+                if let Some(m) = &mut last.marks {
+                    Rc::make_mut(m).set_block(block);
+                } else {
+                    last.marks = block.into();
+                }
+                return;
+            }
+            if let Some(mut m) = last.marks.clone() {
+                Rc::make_mut(&mut m).set_block(block);
+                marks = Some(m);
+            } else {
+                marks = block.into();
+            }
+        } else {
+            marks = block.into();
+        }
+        self.spans.push(TextSpan {
+            text: "".to_owned(),
+            start: self.len,
+            marks,
+        })
     }
 
     fn push_mark(&mut self) {
@@ -106,7 +133,11 @@ fn log_text_patches<'a, I: Iterator<Item = &'a Op>>(
             if let Some(o) = key_ops.filter(|o| o.visible_or_mark(None)).last() {
                 match &o.action {
                     OpType::Make(_) | OpType::Put(_) => {
-                        state.push_str(o.to_str(), o.width(encoding))
+                        if let Some(block) = o.to_block() {
+                            state.push_block(block);
+                        } else {
+                            state.push_str(o.to_str(), o.width(encoding))
+                        }
                     }
                     OpType::MarkBegin(_, data) => {
                         if state.marks.mark_begin(o.id, data, &doc.ops.m) {
@@ -136,7 +167,7 @@ fn log_list_patches<'a, I: Iterator<Item = &'a Op>>(
     obj: &ObjId,
     ops: I,
 ) {
-    let mut marks = MarkStateMachine::default();
+    let mut marks = RichTextStateMachine::default();
     let ops_by_key = ops.group_by(|o| o.elemid_or_key());
     let mut len = 0;
     //let mut finished = Vec::new();
@@ -145,24 +176,33 @@ fn log_list_patches<'a, I: Iterator<Item = &'a Op>>(
         .filter_map(|(_key, key_ops)| {
             key_ops
                 .filter(|o| o.visible_or_mark(None))
-                .filter_map(|o| match &o.action {
-                    OpType::Make(obj_type) => {
-                        Some((Value::Object(*obj_type), o.id, marks.current().cloned()))
+                .filter_map(|o| {
+                    marks.process(o, &doc.ops.m);
+                    match &o.action {
+                        OpType::Make(obj_type) => Some((
+                            Value::Object(*obj_type),
+                            o.id,
+                            marks.current().cloned(),
+                            o.block_id(),
+                        )),
+                        OpType::Put(value) => Some((
+                            Value::Scalar(Cow::Borrowed(value)),
+                            o.id,
+                            marks.current().cloned(),
+                            o.block_id(),
+                        )),
+                        /*
+                                            OpType::MarkBegin(_, data) => {
+                                                marks.mark_begin(o.id, data, &doc.ops.m);
+                                                None
+                                            }
+                                            OpType::MarkEnd(_) => {
+                                                marks.mark_end(o.id, &doc.ops.m);
+                                                None
+                                            }
+                        */
+                        _ => None,
                     }
-                    OpType::Put(value) => Some((
-                        Value::Scalar(Cow::Borrowed(value)),
-                        o.id,
-                        marks.current().cloned(),
-                    )),
-                    OpType::MarkBegin(_, data) => {
-                        marks.mark_begin(o.id, data, &doc.ops.m);
-                        None
-                    }
-                    OpType::MarkEnd(_) => {
-                        marks.mark_end(o.id, &doc.ops.m);
-                        None
-                    }
-                    _ => None,
                 })
                 .enumerate()
                 .last()
@@ -172,9 +212,17 @@ fn log_list_patches<'a, I: Iterator<Item = &'a Op>>(
                     (pos, value)
                 })
         })
-        .for_each(|(index, (val_enum, (value, opid, marks)))| {
+        .for_each(|(index, (val_enum, (value, opid, marks, block_id)))| {
             let conflict = val_enum > 0;
-            patch_log.insert(*obj, index, value.clone().into(), opid, conflict, marks);
+            patch_log.insert(
+                *obj,
+                index,
+                value.clone().into(),
+                opid,
+                conflict,
+                marks,
+                block_id,
+            );
         });
 }
 

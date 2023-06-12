@@ -11,7 +11,7 @@ use crate::columnar::Key as EncodedKey;
 use crate::exid::ExId;
 use crate::hydrate;
 use crate::iter::{Keys, ListRange, MapRange, Values};
-use crate::marks::{Mark, MarkAccumulator, MarkStateMachine};
+use crate::marks::{Mark, MarkAccumulator, RichTextStateMachine};
 use crate::op_set::OpSet;
 use crate::parents::Parents;
 use crate::patches::{Patch, PatchLog, TextRepresentation};
@@ -1257,7 +1257,7 @@ impl Automerge {
         let obj = self.exid_to_obj(obj.as_ref())?;
         let ops_by_key = self.ops().iter_ops(&obj.id).group_by(|o| o.elemid_or_key());
         let mut index = 0;
-        let mut marks = MarkStateMachine::default();
+        let mut marks = RichTextStateMachine::default();
         let mut acc = MarkAccumulator::default();
         let mut last_marks = None;
         let mut mark_len = 0;

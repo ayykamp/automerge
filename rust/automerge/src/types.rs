@@ -17,6 +17,7 @@ pub(crate) const CONCURRENCY_MAGIC_BYTES: [u8; 4] = [0x13, 0xb2, 0x23, 0x09];
 mod opids;
 pub(crate) use opids::OpIds;
 
+pub(crate) use crate::block::Block;
 pub(crate) use crate::clock::Clock;
 pub(crate) use crate::marks::MarkData;
 pub(crate) use crate::value::{Counter, ScalarValue, Value};
@@ -278,7 +279,7 @@ impl OpType {
     pub(crate) fn to_str(&self) -> &str {
         if let OpType::Put(ScalarValue::Str(s)) = &self {
             s
-        } else if self.is_mark() {
+        } else if self.is_mark() || self.is_block() {
             ""
         } else {
             "\u{fffc}"
@@ -287,6 +288,15 @@ impl OpType {
 
     pub(crate) fn is_mark(&self) -> bool {
         matches!(&self, OpType::MarkBegin(_, _) | OpType::MarkEnd(_))
+    }
+
+    pub(crate) fn is_block(&self) -> bool {
+        if let OpType::Put(ScalarValue::Bytes(b)) = &self {
+            if Block::try_decode(b.as_slice()).is_some() {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -709,6 +719,26 @@ impl Op {
         self.action.to_str()
     }
 
+    pub(crate) fn to_bytes(&self) -> Option<&[u8]> {
+        if let OpType::Put(ScalarValue::Bytes(b)) = &self.action {
+            Some(b.as_slice())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn to_block(&self) -> Option<Block> {
+        self.to_bytes().and_then(Block::try_decode)
+    }
+
+    pub(crate) fn visible_block(&self) -> Option<(OpId, Block)> {
+        if self.visible() {
+            self.to_block().map(|b| (self.id, b))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn visible(&self) -> bool {
         if self.is_inc() || self.is_mark() {
             false
@@ -787,6 +817,17 @@ impl Op {
         } else {
             None
         }
+    }
+
+    pub(crate) fn block_id(&self) -> Option<OpId> {
+        if self.action.is_block() {
+            if self.insert {
+                return Some(self.id);
+            } else if let Key::Seq(ElemId(id)) = &self.key {
+                return Some(*id);
+            }
+        }
+        None
     }
 
     pub(crate) fn elemid_or_key(&self) -> Key {

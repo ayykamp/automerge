@@ -7,7 +7,7 @@ use crate::patches::TextRepresentation;
 use crate::{
     exid::ExId,
     iter::{Keys, ListRange, MapRange, Values},
-    marks::{Mark, MarkSet, MarkStateMachine},
+    marks::{Mark, RichText, RichTextStateMachine},
     patches::PatchLog,
     types::{Clock, ListEncoding, ObjId, Op, Prop, ScalarValue},
     value::Value,
@@ -34,7 +34,7 @@ fn process<'a, T: Iterator<Item = &'a Op>>(
     ops: T,
     before: &'a Clock,
     after: &'a Clock,
-    diff: &mut MarkDiff<'a>,
+    diff: &mut RichTextDiff<'a>,
 ) -> Option<Patch<'a>> {
     let mut before_op = None;
     let mut after_op = None;
@@ -71,14 +71,14 @@ fn push_top<'a>(top: &mut Option<Winner<'a>>, op: &'a Op, cross_visible: bool, c
 fn resolve<'a>(
     before: Option<Winner<'a>>,
     after: Option<Winner<'a>>,
-    diff: &mut MarkDiff<'a>,
+    diff: &mut RichTextDiff<'a>,
 ) -> Option<Patch<'a>> {
+    diff.process(&before, &after);
     match (before, after) {
-        (None, Some(after)) if after.is_mark() => diff.process_after(after.op),
+        (_, Some(after)) if after.is_mark() => None,
+        (Some(before), _) if before.is_mark() => None,
         (None, Some(after)) => Some(Patch::New(after, diff.after.current().cloned())),
-        (Some(before), None) if before.is_mark() => diff.process_before(before.op),
         (Some(before), None) => Some(Patch::Delete(before)),
-        (Some(_), Some(after)) if after.is_mark() => diff.process(after.op),
         (Some(before), Some(after)) if before.op.id == after.op.id => Some(Patch::Old {
             before,
             after,
@@ -95,16 +95,16 @@ fn resolve<'a>(
 
 #[derive(Debug, Clone)]
 enum Patch<'a> {
-    New(Winner<'a>, Option<Rc<MarkSet>>),
+    New(Winner<'a>, Option<Rc<RichText>>),
     Old {
         before: Winner<'a>,
         after: Winner<'a>,
-        marks: Option<Rc<MarkSet>>,
+        marks: Option<Rc<RichText>>,
     },
     Update {
         before: Winner<'a>,
         after: Winner<'a>,
-        marks: Option<Rc<MarkSet>>,
+        marks: Option<Rc<RichText>>,
     },
     Delete(Winner<'a>),
 }
@@ -122,7 +122,7 @@ impl<'a> Patch<'a> {
 
 pub(crate) fn log_diff(doc: &Automerge, before: &Clock, after: &Clock, patch_log: &mut PatchLog) {
     for (obj, typ, ops) in doc.ops().iter_objs() {
-        let mut diff = MarkDiff::new(doc);
+        let mut diff = RichTextDiff::new(doc);
         let ops_by_key = ops.group_by(|o| o.elemid_or_key());
         let diffs = ops_by_key
             .into_iter()
@@ -146,17 +146,33 @@ fn log_list_diff<'a, I: Iterator<Item = Patch<'a>>>(
     patches.fold(0, |index, patch| match patch {
         Patch::New(op, marks) => {
             let value = op.value_at(Some(op.clock)).into();
-            patch_log.insert(*obj, index, value, op.id, op.conflict, marks);
+            patch_log.insert(*obj, index, value, op.id, op.conflict, marks, op.block_id());
             index + 1
         }
         Patch::Update { before, after, .. } => {
             let conflict = !before.conflict && after.conflict;
             if after.cross_visible {
                 let value = after.value_at(Some(after.clock)).into();
-                patch_log.put_seq(*obj, index, value, after.id, conflict, true)
+                patch_log.put_seq(
+                    *obj,
+                    index,
+                    value,
+                    after.id,
+                    conflict,
+                    true,
+                    after.block_id(),
+                )
             } else {
                 let value = after.value_at(Some(after.clock)).into();
-                patch_log.put_seq(*obj, index, value, after.id, conflict, false)
+                patch_log.put_seq(
+                    *obj,
+                    index,
+                    value,
+                    after.id,
+                    conflict,
+                    false,
+                    after.block_id(),
+                )
             }
             index + 1
         }
@@ -176,8 +192,8 @@ fn log_list_diff<'a, I: Iterator<Item = Patch<'a>>>(
             }
             index + 1
         }
-        Patch::Delete(_) => {
-            patch_log.delete_seq(*obj, index, 1);
+        Patch::Delete(before) => {
+            patch_log.delete_seq(*obj, index, 1, before.block_id());
             index
         }
     });
@@ -199,7 +215,7 @@ fn log_text_diff<'a, I: Iterator<Item = Patch<'a>>>(
             after,
             marks,
         } => {
-            patch_log.delete_seq(*obj, index, before.width(encoding));
+            patch_log.delete_seq(*obj, index, before.width(encoding), before.block_id());
             patch_log.splice(*obj, index, after.to_str(), marks.clone());
             index + after.width(encoding)
         }
@@ -211,7 +227,7 @@ fn log_text_diff<'a, I: Iterator<Item = Patch<'a>>>(
             index + len
         }
         Patch::Delete(before) => {
-            patch_log.delete_seq(*obj, index, before.width(encoding));
+            patch_log.delete_seq(*obj, index, before.width(encoding), before.block_id());
             index
         }
     });
@@ -269,22 +285,22 @@ fn get_inc(before: &Winner<'_>, after: &Winner<'_>) -> Option<i64> {
 }
 
 #[derive(Debug, Clone)]
-struct MarkDiff<'a> {
+struct RichTextDiff<'a> {
     doc: &'a Automerge,
-    before: MarkStateMachine<'a>,
-    after: MarkStateMachine<'a>,
+    before: RichTextStateMachine<'a>,
+    after: RichTextStateMachine<'a>,
 }
 
-impl<'a> MarkDiff<'a> {
+impl<'a> RichTextDiff<'a> {
     fn new(doc: &'a Automerge) -> Self {
-        MarkDiff {
+        RichTextDiff {
             doc,
-            before: MarkStateMachine::default(),
-            after: MarkStateMachine::default(),
+            before: RichTextStateMachine::default(),
+            after: RichTextStateMachine::default(),
         }
     }
 
-    fn current(&self) -> Option<Rc<MarkSet>> {
+    fn current(&self) -> Option<Rc<RichText>> {
         // do this without all the cloning - cache the result
         let b = self.before.current().cloned().unwrap_or_default();
         let a = self.after.current().cloned().unwrap_or_default();
@@ -296,20 +312,13 @@ impl<'a> MarkDiff<'a> {
         }
     }
 
-    fn process(&mut self, op: &'a Op) -> Option<Patch<'static>> {
-        self.before.process(op, &self.doc.ops.m);
-        self.after.process(op, &self.doc.ops.m);
-        None
-    }
-
-    fn process_before(&mut self, op: &'a Op) -> Option<Patch<'static>> {
-        self.before.process(op, &self.doc.ops.m);
-        None
-    }
-
-    fn process_after(&mut self, op: &'a Op) -> Option<Patch<'static>> {
-        self.after.process(op, &self.doc.ops.m);
-        None
+    fn process(&mut self, before: &Option<Winner<'a>>, after: &Option<Winner<'a>>) {
+        if let Some(w) = &before {
+            self.before.process(w.op, &self.doc.ops.m);
+        }
+        if let Some(w) = &after {
+            self.after.process(w.op, &self.doc.ops.m);
+        }
     }
 }
 
@@ -604,6 +613,9 @@ mod tests {
                     action: ObservedAction::Conflict(prop),
                     path: format!("/{}", path.clone().join("/")),
                 },
+                PatchAction::SplitBlock { .. } => todo!(),
+                PatchAction::JoinBlock { .. } => todo!(),
+                PatchAction::UpdateBlock { .. } => todo!(),
             }
         }
     }

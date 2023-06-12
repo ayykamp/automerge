@@ -1,3 +1,4 @@
+use crate::block::Block;
 use crate::marks::MarkData;
 use crate::op_tree::{OpSetMetadata, OpTree, OpTreeNode};
 use crate::types::{Key, ListEncoding, Op, OpId, OpType};
@@ -13,7 +14,7 @@ mod prop;
 mod seek_mark;
 
 pub(crate) use insert::InsertNth;
-pub(crate) use list_state::{ListState, MarkMap};
+pub(crate) use list_state::{ListState, RichTextQueryState};
 pub(crate) use nth::Nth;
 pub(crate) use opid::{OpIdSearch, SimpleOpIdSearch};
 pub(crate) use prop::Prop;
@@ -24,7 +25,14 @@ pub(crate) use seek_mark::SeekMark;
 pub(crate) struct ChangeVisibility<'a> {
     pub(crate) old_vis: bool,
     pub(crate) new_vis: bool,
-    pub(crate) op: &'a Op,
+    pub(crate) ops: &'a [Op],
+    pub(crate) index: usize,
+}
+
+impl<'a> ChangeVisibility<'a> {
+    pub(crate) fn op(&self) -> &'a Op {
+        &self.ops[self.index]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +139,7 @@ pub(crate) struct Index {
     never_seen_puts: bool,
     mark_begin: HashMap<OpId, MarkData, FxBuildHasher>,
     mark_end: Vec<OpId>,
+    pub(crate) block: Option<(OpId, Block)>,
 }
 
 impl Index {
@@ -146,6 +155,7 @@ impl Index {
             never_seen_puts: true,
             mark_begin: Default::default(),
             mark_end: Default::default(),
+            block: None,
         }
     }
 
@@ -161,17 +171,10 @@ impl Index {
         self.visible.contains_key(seen)
     }
 
-    pub(crate) fn change_vis<'a>(
-        &mut self,
-        change_vis: ChangeVisibility<'a>,
-    ) -> ChangeVisibility<'a> {
-        let ChangeVisibility {
-            old_vis,
-            new_vis,
-            op,
-        } = &change_vis;
+    pub(crate) fn change_vis<'a>(&mut self, change: ChangeVisibility<'a>) -> ChangeVisibility<'a> {
+        let op = change.op();
         let key = op.elemid_or_key();
-        match (old_vis, new_vis) {
+        match (change.old_vis, change.new_vis) {
             (true, false) => match self.visible.get(&key).copied() {
                 Some(n) if n == 1 => {
                     self.visible.remove(&key);
@@ -192,7 +195,7 @@ impl Index {
             }
             _ => {}
         }
-        change_vis
+        change
     }
 
     pub(crate) fn insert(&mut self, op: &Op) {
@@ -270,6 +273,7 @@ impl Index {
         self.mark_begin.extend(other.mark_begin.clone()); // can I remove this clone?
         self.mark_end.extend(&other.mark_end);
         self.visible_text.merge(&other.visible_text);
+        self.block = other.block.clone();
         self.never_seen_puts &= other.never_seen_puts;
     }
 }

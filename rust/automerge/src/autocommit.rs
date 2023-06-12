@@ -2,6 +2,7 @@ use std::ops::RangeBounds;
 
 use crate::automerge::SaveOptions;
 use crate::automerge::{current_state, diff};
+use crate::block::Block;
 use crate::exid::ExId;
 use crate::hydrate;
 use crate::iter::{Keys, ListRange, MapRange, Values};
@@ -868,6 +869,42 @@ impl Transactable for AutoCommit {
             end,
             expand,
         )
+    }
+
+    fn split_block<S: Into<String>, O: AsRef<ExId>, P: IntoIterator<Item = S>>(
+        &mut self,
+        obj: O,
+        index: usize,
+        name: S,
+        parents: P,
+    ) -> Result<Cursor, AutomergeError> {
+        self.ensure_transaction_open();
+        let value = Block::new(name, parents);
+        let (patch_log, tx) = self.transaction.as_mut().unwrap();
+        tx.split_block(&mut self.doc, patch_log, obj.as_ref(), index, value)
+    }
+
+    fn join_block<O: AsRef<ExId>>(
+        &mut self,
+        obj: O,
+        block_id: &Cursor,
+    ) -> Result<(), AutomergeError> {
+        self.ensure_transaction_open();
+        let (patch_log, tx) = self.transaction.as_mut().unwrap();
+        tx.join_block(&mut self.doc, patch_log, obj.as_ref(), block_id)
+    }
+
+    fn update_block<S: Into<String>, O: AsRef<ExId>, P: IntoIterator<Item = S>>(
+        &mut self,
+        obj: O,
+        block_id: &Cursor,
+        name: S,
+        parents: P,
+    ) -> Result<(), AutomergeError> {
+        self.ensure_transaction_open();
+        let value = Block::new(name, parents);
+        let (patch_log, tx) = self.transaction.as_mut().unwrap();
+        tx.update_block(&mut self.doc, patch_log, obj.as_ref(), block_id, value)
     }
 
     fn base_heads(&self) -> Vec<ChangeHash> {

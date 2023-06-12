@@ -212,6 +212,11 @@ export class Automerge {
   unmark(obj: ObjID, range: MarkRange, name: string): void;
   marks(obj: ObjID, heads?: Heads): Mark[];
 
+  // blocks
+  splitBlock(obj: ObjID, index: number, name: string, parents: string[]): Cursor;
+  updateBlock(obj: ObjID, blockId: Cursor, name: string, parents: string[]);
+  joinBlock(obj: ObjID, blockId: Cursor);
+
   diff(before: Heads, after: Heads): Patch[];
 
   // text cursor

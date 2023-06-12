@@ -3,10 +3,10 @@ use std::ops::RangeBounds;
 use std::rc::Rc;
 
 use crate::exid::ExId;
-use crate::marks::MarkSet;
+use crate::marks::RichText;
 use crate::op_set::OpSet;
 use crate::types::Clock;
-use crate::types::ListEncoding;
+use crate::types::{ListEncoding, OpId};
 use crate::value::Value;
 
 use super::{TopOp, TopOps};
@@ -73,6 +73,7 @@ impl<'a, R: RangeBounds<usize>> Iterator for ListRange<'a, R> {
                 inner.state += op.width(inner.encoding);
                 let value = op.value_at(inner.clock.as_ref());
                 let id = inner.op_set.id_to_exid(op.id);
+                let block_id = op.block_id();
                 if inner.range.contains(&index) {
                     return Some(ListRangeItem {
                         index,
@@ -80,6 +81,7 @@ impl<'a, R: RangeBounds<usize>> Iterator for ListRange<'a, R> {
                         id,
                         conflict,
                         marks,
+                        block_id,
                     });
                 }
             }
@@ -94,11 +96,12 @@ pub struct ListRangeItem<'a> {
     pub value: Value<'a>,
     pub id: ExId,
     pub conflict: bool,
-    pub(crate) marks: Option<Rc<MarkSet>>,
+    pub(crate) marks: Option<Rc<RichText>>,
+    pub(crate) block_id: Option<OpId>,
 }
 
 impl<'a> ListRangeItem<'a> {
-    pub fn marks(&self) -> Option<&MarkSet> {
+    pub fn marks(&self) -> Option<&RichText> {
         self.marks.as_deref()
     }
 }
