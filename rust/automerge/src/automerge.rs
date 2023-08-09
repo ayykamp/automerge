@@ -570,7 +570,8 @@ impl Automerge {
                 am.apply_changes(change.into_iter().chain(c))?;
                 // Only allow missing deps if the first chunk was a document chunk
                 // See https://github.com/automerge/automerge/pull/599#issuecomment-1549667472
-                if !am.queue.is_empty() && !first_chunk_was_doc {
+                if !am.queue.is_empty() && !first_chunk_was_doc && on_error == OnPartialLoad::Error
+                {
                     return Err(AutomergeError::MissingDeps);
                 }
             }
@@ -618,7 +619,7 @@ impl Automerge {
 
     /// Like [`Self::load_incremental`] but log the changes to the current state of the document to
     /// [`PatchLog`]
-    pub(crate) fn load_incremental_log_patches(
+    pub fn load_incremental_log_patches(
         &mut self,
         data: &[u8],
         patch_log: &mut PatchLog,

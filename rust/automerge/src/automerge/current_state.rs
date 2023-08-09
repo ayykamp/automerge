@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use itertools::Itertools;
 
@@ -14,7 +14,7 @@ use crate::{
 struct TextSpan {
     text: String,
     start: usize,
-    marks: Option<Rc<RichText>>,
+    marks: Option<Arc<RichText>>,
 }
 
 #[derive(Debug, Default)]
@@ -43,14 +43,14 @@ impl<'a> TextState<'a> {
         if let Some(last) = self.spans.last_mut() {
             if last.text.is_empty() {
                 if let Some(m) = &mut last.marks {
-                    Rc::make_mut(m).set_block(block);
+                    Arc::make_mut(m).set_block(block);
                 } else {
                     last.marks = block.into();
                 }
                 return;
             }
             if let Some(mut m) = last.marks.clone() {
-                Rc::make_mut(&mut m).set_block(block);
+                Arc::make_mut(&mut m).set_block(block);
                 marks = Some(m);
             } else {
                 marks = block.into();

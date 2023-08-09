@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::block::Block;
 use crate::marks::RichText;
@@ -11,7 +11,7 @@ use crate::{marks::Mark, sequence_tree::SequenceTree};
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PatchBuilder {
     patches: Vec<Patch>,
-    last_mark_set: Option<Rc<RichText>>, // keep this around for a quick pointer equality test
+    last_mark_set: Option<Arc<RichText>>, // keep this around for a quick pointer equality test
 }
 
 impl PatchBuilder {
@@ -40,7 +40,7 @@ impl PatchBuilder {
         index: usize,
         tagged_value: (Value<'_>, ObjId),
         conflict: bool,
-        marks: Option<Rc<RichText>>,
+        marks: Option<Arc<RichText>>,
         block_id: Option<Cursor>,
     ) {
         if let Some(block) = tagged_value.0.to_block() {
@@ -85,7 +85,7 @@ impl PatchBuilder {
         obj: ObjId,
         index: usize,
         value: &str,
-        marks: Option<Rc<RichText>>,
+        marks: Option<Arc<RichText>>,
     ) {
         if let Some(PatchAction::SpliceText {
             index: tail_index,

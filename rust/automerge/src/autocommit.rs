@@ -4,13 +4,14 @@ use crate::automerge::SaveOptions;
 use crate::automerge::{current_state, diff};
 use crate::block::Block;
 use crate::exid::ExId;
-use crate::hydrate;
 use crate::iter::{Keys, ListRange, MapRange, Values};
 use crate::marks::{ExpandMark, Mark};
 use crate::patches::{PatchLog, TextRepresentation};
 use crate::sync::SyncDoc;
 use crate::transaction::{CommitOptions, Transactable};
 use crate::types::Clock;
+use crate::VerificationMode;
+use crate::{hydrate, OnPartialLoad};
 use crate::{sync, ObjType, Parents, Patch, ReadDoc, ScalarValue};
 use crate::{
     transaction::TransactionInner, ActorId, Automerge, AutomergeError, Change, ChangeHash, Cursor,
@@ -106,6 +107,27 @@ impl AutoCommit {
         })
     }
 
+    pub fn load_with(
+        data: &[u8],
+        on_error: OnPartialLoad,
+        mode: VerificationMode,
+    ) -> Result<Self, AutomergeError> {
+        let doc = Automerge::load_with(
+            data,
+            on_error,
+            mode,
+            &mut PatchLog::inactive(TextRepresentation::default()),
+        )?;
+        Ok(Self {
+            doc,
+            transaction: None,
+            patch_log: PatchLog::inactive(TextRepresentation::default()),
+            diff_cursor: Vec::new(),
+            save_cursor: Vec::new(),
+            isolation: None,
+        })
+    }
+
     /// Erases the diff cursor created by [`Self::update_diff_cursor`] and no
     /// longer indexes changes to the document.
     pub fn reset_diff_cursor(&mut self) {
@@ -181,7 +203,10 @@ impl AutoCommit {
             self.patch_log.make_patches(&self.doc)
         } else if before.is_empty() && after == heads {
             let mut patch_log = PatchLog::active(self.patch_log.text_rep());
-            patch_log.heads = Some(after.to_vec());
+            // This if statement is only active if the current heads are the same as `after`
+            // so we don't need to tell the patch log to target a specific heads and consequently
+            // it wll be able to generate patches very fast as it doesn't need to make any clocks
+            patch_log.heads = None;
             current_state::log_current_state_patches(&self.doc, &mut patch_log);
             patch_log.make_patches(&self.doc)
         } else {
@@ -819,7 +844,7 @@ impl Transactable for AutoCommit {
         &mut self,
         obj: O,
         pos: usize,
-        del: usize,
+        del: isize,
         vals: V,
     ) -> Result<(), AutomergeError> {
         self.ensure_transaction_open();
@@ -831,7 +856,7 @@ impl Transactable for AutoCommit {
         &mut self,
         obj: O,
         pos: usize,
-        del: usize,
+        del: isize,
         text: &str,
     ) -> Result<(), AutomergeError> {
         self.ensure_transaction_open();
@@ -959,5 +984,16 @@ impl<'a> SyncDoc for SyncWrapper<'a> {
         self.inner
             .doc
             .receive_sync_message_log_patches(sync_state, message, patch_log)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    fn is_send<S: Send>() {}
+
+    #[test]
+    fn test_autocommit_is_send() {
+        is_send::<super::AutoCommit>();
     }
 }
