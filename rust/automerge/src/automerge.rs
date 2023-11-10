@@ -621,40 +621,7 @@ impl Automerge {
             storage::Chunk::Document(d) => {
                 tracing::trace!("first chunk is document chunk, inflating");
                 first_chunk_was_doc = true;
-                let storage::load::Reconstructed {
-                    max_op,
-                    result: op_set,
-                    changes,
-                    heads,
-                } = storage::load::reconstruct_document(
-                    &d,
-                    options.verification_mode,
-                    OpSet::builder(),
-                )
-                .map_err(|e| load::Error::InflateDocument(Box::new(e)))?;
-                let mut hashes_by_index = HashMap::new();
-                let mut actor_to_history: HashMap<usize, Vec<usize>> = HashMap::new();
-                let mut change_graph = ChangeGraph::new();
-                for (index, change) in changes.iter().enumerate() {
-                    // SAFETY: This should be fine because we just constructed an opset containing
-                    // all the changes
-                    let actor_index = op_set.osd.actors.lookup(change.actor_id()).unwrap();
-                    actor_to_history.entry(actor_index).or_default().push(index);
-                    hashes_by_index.insert(index, change.hash());
-                    change_graph.add_change(change, actor_index)?;
-                }
-                let history_index = hashes_by_index.into_iter().map(|(k, v)| (v, k)).collect();
-                Self {
-                    queue: vec![],
-                    history: changes,
-                    history_index,
-                    states: actor_to_history,
-                    change_graph,
-                    ops: op_set,
-                    deps: heads.into_iter().collect(),
-                    actor: Actor::Unused(ActorId::random()),
-                    max_op,
-                }
+                reconstruct_document(&d, options.verification_mode)?
             }
             storage::Chunk::Change(stored_change) => {
                 tracing::trace!("first chunk is change chunk");
@@ -1870,4 +1837,41 @@ pub(crate) struct Isolation {
     actor_index: usize,
     seq: u64,
     clock: Clock,
+}
+
+pub(crate) fn reconstruct_document<'a>(
+    doc: &'a storage::Document<'a>,
+    mode: VerificationMode,
+) -> Result<Automerge, AutomergeError> {
+    let storage::load::ReconOpSet {
+        changes,
+        op_set,
+        heads,
+        max_op,
+    } = storage::load::reconstruct_opset(doc, mode)
+        .map_err(|e| load::Error::InflateDocument(Box::new(e)))?;
+
+    let mut hashes_by_index = HashMap::new();
+    let mut actor_to_history: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut change_graph = ChangeGraph::new();
+    for (index, change) in changes.iter().enumerate() {
+        // SAFETY: This should be fine because we just constructed an opset containing
+        // all the changes
+        let actor_index = op_set.osd.actors.lookup(change.actor_id()).unwrap();
+        actor_to_history.entry(actor_index).or_default().push(index);
+        hashes_by_index.insert(index, change.hash());
+        change_graph.add_change(change, actor_index)?;
+    }
+    let history_index = hashes_by_index.into_iter().map(|(k, v)| (v, k)).collect();
+    Ok(Automerge {
+        queue: vec![],
+        history: changes,
+        history_index,
+        states: actor_to_history,
+        change_graph,
+        ops: op_set,
+        deps: heads.into_iter().collect(),
+        actor: Actor::Unused(ActorId::random()),
+        max_op,
+    })
 }

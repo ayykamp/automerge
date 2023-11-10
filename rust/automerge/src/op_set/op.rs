@@ -21,7 +21,10 @@ impl OpIdx {
     }
 
     pub(crate) fn as_op2(self, osd: &OpSetData) -> Op2<'_> {
-        Op2::new(self.0 as usize, osd)
+        Op2 {
+            idx: self.get(),
+            osd,
+        }
     }
 }
 
@@ -31,35 +34,96 @@ pub(crate) struct Op2<'a> {
     osd: &'a OpSetData,
 }
 
-// lamport compare with PartialEq! =D
+/*
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct OpDep<'a> {
+    idx: usize,
+    osd: &'a OpSetData,
+}
+
+impl<'a> OpDep<'a> {
+    fn raw(&self) -> &OpDepRaw {
+        &self.osd.op_deps[self.idx]
+    }
+
+    pub(crate) fn idx(&self) -> OpDepIdx {
+        OpDepIdx::new(self.idx)
+    }
+
+    pub(crate) fn pred(&self) -> Op2<'a> {
+        self.raw().pred.as_op2(self.osd)
+    }
+
+    pub(crate) fn succ(&self) -> Op2<'a> {
+        self.raw().succ.as_op2(self.osd)
+    }
+
+    pub(crate) fn next_pred(&self) -> Option<OpDep<'a>> {
+        self.raw()
+            .next_pred
+            .as_ref()
+            .map(|next| next.as_opdep(self.osd))
+    }
+
+    pub(crate) fn next_succ(&self) -> Option<OpDep<'a>> {
+        self.raw()
+            .next_succ
+            .as_ref()
+            .map(|next| next.as_opdep(self.osd))
+    }
+
+    pub(crate) fn last_pred(&self) -> Option<OpDep<'a>> {
+        self.raw()
+            .last_pred
+            .as_ref()
+            .map(|next| next.as_opdep(self.osd))
+    }
+
+    pub(crate) fn last_succ(&self) -> Option<OpDep<'a>> {
+        self.raw()
+            .last_succ
+            .as_ref()
+            .map(|next| next.as_opdep(self.osd))
+    }
+}
+*/
+
 impl<'a> PartialEq for Op2<'a> {
     fn eq(&self, other: &Self) -> bool {
         (std::ptr::eq(self.osd, other.osd) && self.idx == other.idx) || self.op() == other.op()
     }
 }
 
+impl<'a> Eq for Op2<'a> {}
+
 impl<'a> PartialOrd for Op2<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for Op2<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
         let c1 = self.id().counter();
         let c2 = other.id().counter();
-        Some(c1.cmp(&c2).then_with(|| self.actor().cmp(other.actor())))
+        c1.cmp(&c2).then_with(|| self.actor().cmp(other.actor()))
     }
 }
 
 impl<'a> Op2<'a> {
-    pub(crate) fn new(idx: usize, osd: &'a OpSetData) -> Self {
-        Self { idx, osd }
-    }
-
     pub(crate) fn actor(&self) -> &ActorId {
         &self.osd.actors[self.op().id.actor()]
     }
 
-    pub(crate) fn obj(&self) -> &'a ObjId {
-        &self.op_plus().obj
+    pub(crate) fn osd(&self) -> &'a OpSetData {
+        self.osd
     }
 
-    fn op_plus(&self) -> &'a OpPlus {
+    pub(crate) fn obj(&self) -> &'a ObjId {
+        &self.raw().obj
+    }
+
+    fn raw(&self) -> &'a OpRaw {
         &self.osd.ops[self.idx]
     }
 
@@ -127,7 +191,7 @@ impl<'a> Op2<'a> {
         if encoding == ListEncoding::List {
             1
         } else {
-            self.op_plus().width as usize
+            self.raw().width as usize
         }
     }
 
@@ -188,18 +252,72 @@ impl<'a> Op2<'a> {
         self.osd.key_cmp(&self.op().key, other)
     }
 
-    /*
-        pub(crate) fn succ2(&self) -> impl Iterator<Item = Op2<'a>> {
-          todo!()
-        }
-    */
-
     pub(crate) fn succ(&self) -> &OpIds {
         &self.op().succ
     }
 
     pub(crate) fn pred(&self) -> impl Iterator<Item = &OpId> + ExactSizeIterator {
         self.op().pred.iter()
+    }
+
+    /*
+        pub(crate) fn succ_idx(&self) -> SuccIdxIter<'a> {
+            SuccIdxIter {
+                next: self.raw().succ,
+                osd: self.osd,
+            }
+        }
+
+        pub(crate) fn succ_ids(&self) -> impl Iterator<Item = &'a OpId> {
+            self.succ_idx()
+                .map(|idx| idx.as_opdep(self.osd).succ().id())
+        }
+
+        pub(crate) fn pred_idx(&self) -> PredIdxIter<'a> {
+            PredIdxIter {
+                next: self.raw().pred,
+                osd: self.osd,
+            }
+        }
+
+        pub(crate) fn pred_ids(&self) -> impl Iterator<Item = &'a OpId> {
+            self.pred_idx()
+                .map(|idx| idx.as_opdep(self.osd).pred().id())
+        }
+    */
+}
+
+pub(crate) struct PredIdxIter<'a> {
+    next: Option<OpDepIdx>,
+    osd: &'a OpSetData,
+}
+
+pub(crate) struct SuccIdxIter<'a> {
+    next: Option<OpDepIdx>,
+    osd: &'a OpSetData,
+}
+
+impl<'a> Iterator for PredIdxIter<'a> {
+    type Item = OpDepIdx;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(idx) = self.next {
+            self.next = self.osd.op_deps[idx.get()].next_pred;
+            Some(idx)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Iterator for SuccIdxIter<'a> {
+    type Item = OpDepIdx;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(idx) = self.next {
+            self.next = self.osd.op_deps[idx.get()].next_succ;
+            Some(idx)
+        } else {
+            None
+        }
     }
 }
 
@@ -439,22 +557,56 @@ impl Op {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct OpLinkIdx(u32);
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OpDepIdx(u32);
 
-/*
-#[derive(Clone, Debug)]
-pub(crate) struct OpLink {
-    op: OpIdx,
-    next: Option<OpLinkIdx>,
+impl OpDepIdx {
+    pub(crate) fn new(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    pub(crate) fn get(&self) -> usize {
+        self.0 as usize
+    }
+
+    /*
+        pub(crate) fn as_opdep(self, osd: &OpSetData) -> OpDep<'_> {
+            OpDep {
+                idx: self.get(),
+                osd,
+            }
+        }
+    */
 }
-*/
 
 #[derive(Clone, Debug)]
-pub(crate) struct OpPlus {
+pub(crate) struct OpDepRaw {
+    pub(crate) pred: OpIdx,
+    pub(crate) succ: OpIdx,
+    pub(crate) next_pred: Option<OpDepIdx>,
+    pub(crate) next_succ: Option<OpDepIdx>,
+    pub(crate) last_pred: Option<OpDepIdx>,
+    pub(crate) last_succ: Option<OpDepIdx>,
+}
+
+impl OpDepRaw {
+    pub(crate) fn new(pred: OpIdx, succ: OpIdx) -> Self {
+        Self {
+            pred,
+            succ,
+            next_pred: None,
+            next_succ: None,
+            last_pred: None,
+            last_succ: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OpRaw {
     pub(crate) obj: ObjId,
     pub(crate) width: u32,
-    //pub(crate) pred: Option<OpLinkIdx>,
-    //pub(crate) succ: Option<OpLinkIdx>,
+    pub(crate) pred: Option<OpDepIdx>,
+    pub(crate) succ: Option<OpDepIdx>,
     pub(crate) op: Op,
 }

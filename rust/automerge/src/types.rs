@@ -499,6 +499,7 @@ impl Key {
     }
 }
 
+// FIXME - isn't having ord and partial ord here dangerous?
 #[derive(Debug, Clone, PartialOrd, Ord, Eq, PartialEq, Copy, Hash, Default)]
 pub(crate) struct OpId(u32, u32);
 

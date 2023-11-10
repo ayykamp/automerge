@@ -410,7 +410,7 @@ pub(crate) mod gen {
                 message in proptest::option::of("[a-z]{200}"),
                 this_actor in Just(this_actor),
             ) -> Change {
-            let ops = ops.iter().map(|(obj, op)| op_as_actor_id(obj, op.as_op2(&osd), &osd));
+            let ops = ops.iter().map(|(_, op)| op_as_actor_id(op.as_op2(&osd)));
             Change::new(ChangeBuilder::new()
                 .with_dependencies(deps)
                 .with_start_op(start_op.try_into().unwrap())

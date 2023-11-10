@@ -140,10 +140,8 @@ impl TransactionInner {
             .with_message(self.message.clone())
             .with_dependencies(deps)
             .with_timestamp(self.time)
-            .build(
-                self.operations(osd)
-                    .map(|op| op_as_actor_id(op.obj(), op, osd)),
-            ) {
+            .build(self.operations(osd).map(|op| op_as_actor_id(op)))
+        {
             Ok(s) => s,
             Err(PredOutOfOrder) => {
                 // SAFETY: types::Op::preds is `types::OpIds` which ensures ops are always sorted

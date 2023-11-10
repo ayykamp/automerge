@@ -1,4 +1,5 @@
 use crate::clock::Clock;
+use crate::error::AutomergeError;
 use crate::exid::ExId;
 use crate::indexed_cache::IndexedCache;
 use crate::iter::{Keys, ListRange, MapRange, TopOps};
@@ -19,11 +20,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ops::RangeBounds;
 
-mod load;
 mod op;
 
-pub(crate) use load::OpSetBuilder;
-pub(crate) use op::{Op, Op2, OpIdx, OpPlus};
+pub(crate) use op::{Op, Op2, OpDepIdx, OpDepRaw, OpIdx, OpRaw};
 
 pub(crate) type OpSet = OpSetInternal;
 
@@ -50,8 +49,14 @@ pub(crate) struct OpSetInternal {
 }
 
 impl OpSetInternal {
-    pub(crate) fn builder() -> OpSetBuilder {
-        OpSetBuilder::new()
+    pub(crate) fn from_actors(actors: Vec<ActorId>) -> Self {
+        let mut trees: HashMap<_, _, _> = Default::default();
+        trees.insert(ObjId::root(), OpTree::new());
+        OpSetInternal {
+            trees,
+            length: 0,
+            osd: OpSetData::from_actors(actors),
+        }
     }
 
     pub(crate) fn new() -> Self {
@@ -64,6 +69,7 @@ impl OpSetInternal {
                 actors: IndexedCache::new(),
                 props: IndexedCache::new(),
                 ops: Vec::new(),
+                op_deps: Vec::new(),
             },
         }
     }
@@ -259,7 +265,9 @@ impl OpSetInternal {
             for i in op_indices {
                 if let Some(idx) = tree.internal.get(*i) {
                     let old_vis = idx.as_op2(&self.osd).visible();
-                    self.osd.add_succ(idx, op);
+                    self.osd.add_succ1(idx, op);
+                    self.osd.add_succ2(idx, op);
+                    //idx.as_op2(&self.osd).audit();
                     let new_vis = idx.as_op2(&self.osd).visible();
                     tree.internal.update(
                         *i,
@@ -271,6 +279,7 @@ impl OpSetInternal {
                     );
                 }
             }
+            //op.as_op2(&self.osd).audit();
         }
     }
 
@@ -334,6 +343,30 @@ impl OpSetInternal {
             self.length += 1;
         } else {
             tracing::warn!("attempting to insert op for unknown object");
+        }
+    }
+
+    pub(crate) fn load_idx(&mut self, obj: &ObjId, idx: OpIdx) -> Result<(), AutomergeError> {
+        let op = idx.as_op2(&self.osd);
+        if let OpType::Make(typ) = op.action() {
+            self.trees.insert(
+                op.id().into(),
+                OpTree {
+                    internal: Default::default(),
+                    objtype: *typ,
+                    last_insert: None,
+                    parent: Some(*obj),
+                },
+            );
+        }
+
+        if let Some(tree) = self.trees.get_mut(obj) {
+            tree.last_insert = None;
+            tree.internal.insert(tree.len(), idx, &self.osd);
+            self.length += 1;
+            Ok(())
+        } else {
+            Err(AutomergeError::NotAnObject)
         }
     }
 
@@ -500,7 +533,8 @@ impl<'a> ExactSizeIterator for Iter<'a> {
 pub(crate) struct OpSetData {
     pub(crate) actors: IndexedCache<ActorId>,
     pub(crate) props: IndexedCache<String>,
-    ops: Vec<OpPlus>,
+    ops: Vec<OpRaw>,
+    op_deps: Vec<OpDepRaw>,
 }
 
 impl Default for OpSetData {
@@ -509,6 +543,7 @@ impl Default for OpSetData {
             actors: IndexedCache::new(),
             props: IndexedCache::new(),
             ops: Vec::new(),
+            op_deps: Vec::new(),
         }
     }
 }
@@ -589,7 +624,7 @@ impl OpSetData {
         ChangeOpIter::new(self, range)
     }
 
-    pub(crate) fn add_succ(&mut self, old_op: OpIdx, new_op: OpIdx) {
+    pub(crate) fn add_succ1(&mut self, old_op: OpIdx, new_op: OpIdx) {
         // this gets trucky b/c we're reading and writing to the same array
         let new_op = new_op.as_op2(self);
         let new_op_id = *new_op.id();
@@ -605,10 +640,92 @@ impl OpSetData {
         }
     }
 
+    pub(crate) fn add_pred(&mut self, pred: OpIdx, succ: OpIdx) {
+        let pred_id = self.ops[pred.get()].op.id;
+        let succ_op = &mut self.ops[succ.get()].op;
+        let succ_id = succ_op.id;
+        let inc = succ_op.get_increment_value();
+
+        succ_op
+            .pred
+            .add(pred_id, |l, r| l.lamport_cmp(r, &self.actors.cache));
+
+        if let Some(n) = inc {
+            self.ops[pred.get()].op.increment(n, succ_id);
+        }
+
+        self.add_succ2(pred, succ);
+    }
+
+    pub(crate) fn add_succ2(&mut self, pred: OpIdx, succ: OpIdx) {
+        let op_dep_idx = OpDepIdx::new(self.op_deps.len());
+        let mut op_dep = OpDepRaw::new(pred, succ);
+
+        let mut last_succ = None;
+        let mut next_succ = self.ops[pred.get()].succ;
+        while let Some(next) = next_succ {
+            let current = &self.op_deps[next.get()];
+            if current.succ.as_op2(self) > succ.as_op2(self) {
+                break;
+            }
+            last_succ = next_succ;
+            next_succ = current.next_succ;
+        }
+
+        let mut last_pred = None;
+        let mut next_pred = self.ops[succ.get()].pred;
+        while let Some(next) = next_pred {
+            let current = &self.op_deps[next.get()];
+            if current.pred.as_op2(self) > pred.as_op2(self) {
+                break;
+            }
+            last_pred = next_pred;
+            next_pred = current.next_pred;
+        }
+
+        op_dep.next_succ = next_succ;
+        op_dep.next_pred = next_pred;
+        op_dep.last_succ = last_succ;
+        op_dep.last_pred = last_pred;
+
+        if let Some(last) = last_succ {
+            self.op_deps[last.get()].next_succ = Some(op_dep_idx);
+        } else {
+            self.ops[pred.get()].succ = Some(op_dep_idx);
+        }
+
+        if let Some(last) = last_pred {
+            self.op_deps[last.get()].next_pred = Some(op_dep_idx);
+        } else {
+            self.ops[succ.get()].pred = Some(op_dep_idx);
+        }
+
+        if let Some(next) = next_succ {
+            self.op_deps[next.get()].last_succ = Some(op_dep_idx);
+        }
+
+        if let Some(next) = next_pred {
+            self.op_deps[next.get()].last_pred = Some(op_dep_idx);
+        }
+
+        //log!("opdep idx={} op_dep={:?}", op_dep_idx.get(), op_dep);
+        //log!("  idx={} pred={:?}", pred.get(), &self.ops[pred.get()]);
+        //log!("  idx={} succ={:?}", succ.get(), &self.ops[succ.get()]);
+
+        self.op_deps.push(op_dep);
+    }
+
     pub(crate) fn push(&mut self, obj: ObjId, op: Op) -> OpIdx {
         let index = self.ops.len();
+        //log!("push idx={:?} op={:?}", index, op);
         let width = TextValue::width(op.to_str()) as u32; // TODO faster
-        self.ops.push(OpPlus { obj, width, op });
+        self.ops.push(OpRaw {
+            obj,
+            width,
+            op,
+            pred: None,
+            succ: None,
+        });
         OpIdx::new(index)
     }
 
@@ -621,6 +738,7 @@ impl OpSetData {
             props: IndexedCache::new(),
             actors: actors.into_iter().collect(),
             ops: Vec::new(),
+            op_deps: Vec::new(),
         }
     }
 

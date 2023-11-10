@@ -403,7 +403,7 @@ impl Serialize for Counter {
 
 impl fmt::Display for Counter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", &self.current)
+        write!(f, "{}", self.current)
     }
 }
 

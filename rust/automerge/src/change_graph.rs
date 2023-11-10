@@ -367,10 +367,7 @@ mod tests {
                     .with_actor(actor.clone())
                     .with_seq(*seq)
                     .with_timestamp(timestamp)
-                    .build(
-                        ops.iter()
-                            .map(|op| op_as_actor_id(&root, op.as_op2(&osd), &osd)),
-                    )
+                    .build(ops.iter().map(|op| op_as_actor_id(op.as_op2(&osd))))
                     .unwrap(),
             );
             *seq = seq.checked_add(1).unwrap();
