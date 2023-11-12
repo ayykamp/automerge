@@ -18,7 +18,7 @@ pub struct Change {
 
 impl Change {
     pub(crate) fn new(stored: StoredChange<'static, Verified>) -> Self {
-        let len = stored.iter_ops().count();
+        let len = stored.len();
         Self {
             stored,
             len,

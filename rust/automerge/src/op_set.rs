@@ -584,6 +584,12 @@ impl<'a> ChangeOpIter<'a> {
     }
 }
 
+impl<'a> ExactSizeIterator for ChangeOpIter<'a> {
+    fn len(&self) -> usize {
+        (self.range.end - self.range.start) as usize
+    }
+}
+
 impl<'a> Iterator for ChangeOpIter<'a> {
     type Item = Op2<'a>;
     fn next(&mut self) -> Option<Self::Item> {
