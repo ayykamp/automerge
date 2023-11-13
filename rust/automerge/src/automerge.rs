@@ -1485,7 +1485,7 @@ impl Automerge {
         let opid = self.cursor_to_opid(cursor, clock.as_ref())?;
         let found = self
             .ops
-            .seek_opid(&obj.id, opid, clock.as_ref())
+            .seek_list_opid(&obj.id, opid, clock.as_ref())
             .ok_or_else(|| AutomergeError::InvalidCursor(cursor.clone()))?;
         Ok(found.index)
     }
@@ -1575,7 +1575,7 @@ impl Automerge {
                             let prop = match *op.key() {
                                 Key::Map(prop) => Prop::Map(self.ops.osd.props.get(prop).clone()),
                                 Key::Seq(_) => {
-                                    let Some(found) = self.ops.seek_opid(obj_id, *op.id(), None)
+                                    let Some(found) = self.ops.seek_list_opid(obj_id, *op.id(), None)
                                     else {
                                         continue;
                                     };

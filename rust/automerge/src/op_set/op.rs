@@ -1,8 +1,7 @@
 use crate::clock::Clock;
 use crate::exid::ExId;
 use crate::op_set::OpSetData;
-use crate::text_value::TextValue;
-use crate::types::{self, ActorId, ElemId, Key, ListEncoding, ObjId, OpId, OpIds, OpType};
+use crate::types::{self, ActorId, ElemId, Key, ListEncoding, ObjId, OpId, OpIds, OpType, Prop};
 use crate::value::{Counter, ScalarValue, Value};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -129,6 +128,14 @@ impl<'a> Op2<'a> {
 
     fn op(&self) -> &'a Op {
         &self.osd.ops[self.idx].op
+    }
+
+    pub(crate) fn map_prop(&self) -> Option<Prop> {
+        if let Key::Map(m) = &self.op().key {
+            Some(Prop::Map(String::from(self.osd.props.safe_get(*m)?)))
+        } else {
+            None
+        }
     }
 
     pub(crate) fn action(&self) -> &'a OpType {
@@ -397,13 +404,6 @@ impl Op {
                 *current -= *n;
                 increments.retain(|(id, _)| id != opid);
             }
-        }
-    }
-
-    pub(crate) fn width(&self, encoding: ListEncoding) -> usize {
-        match encoding {
-            ListEncoding::List => 1,
-            ListEncoding::Text => TextValue::width(self.to_str()),
         }
     }
 

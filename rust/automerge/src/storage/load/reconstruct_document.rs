@@ -139,6 +139,8 @@ pub(crate) fn reconstruct_opset<'a>(
         flush_ops(&obj, next.as_ref(), &mut state)?;
     }
 
+    state.op_set.add_indexes();
+
     let op_set = state.op_set;
     let change_collector = state.change_collector;
     let max_op = state.max_op;

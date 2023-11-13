@@ -377,7 +377,7 @@ mod tests {
     }
 
     fn make_optree(actions: &[Action], osd: &OpSetData) -> super::OpTreeInternal {
-        let mut optree = OpTreeInternal::new();
+        let mut optree = OpTreeInternal::default();
         for action in actions {
             match action {
                 Action::Insert(index, idx) => {

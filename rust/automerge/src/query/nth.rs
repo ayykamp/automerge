@@ -2,7 +2,7 @@ use crate::error::AutomergeError;
 use crate::marks::{MarkSet, MarkStateMachine};
 use crate::op_set::Op2;
 use crate::op_tree::{OpTree, OpTreeNode};
-use crate::query::{ListState, MarkMap, OpSetData, QueryResult, TreeQuery};
+use crate::query::{Index, ListState, MarkMap, OpSetData, QueryResult, TreeQuery};
 use crate::types::{Clock, Key, ListEncoding, OpIds};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -102,11 +102,16 @@ impl<'a> TreeQuery<'a> for Nth<'a> {
         false
     }
 
-    fn query_node(&mut self, child: &'a OpTreeNode, osd: &OpSetData) -> QueryResult {
-        self.list_state.check_if_node_is_clean(child);
+    fn query_node(
+        &mut self,
+        child: &'a OpTreeNode,
+        index: &'a Index,
+        osd: &OpSetData,
+    ) -> QueryResult {
+        self.list_state.check_if_node_is_clean(index);
         if self.clock.is_none() {
             self.list_state
-                .process_node(child, osd, self.marks.as_mut())
+                .process_node(child, index, osd, self.marks.as_mut())
         } else {
             QueryResult::Descend
         }

@@ -140,7 +140,7 @@ impl TransactionInner {
             .with_message(self.message.clone())
             .with_dependencies(deps)
             .with_timestamp(self.time)
-            .build(self.operations(osd).map(|op| op_as_actor_id(op)))
+            .build(self.operations(osd).map(op_as_actor_id))
         {
             Ok(s) => s,
             Err(PredOutOfOrder) => {
@@ -708,12 +708,12 @@ impl TransactionInner {
             for v in &values {
                 let op = self.next_insert(key, v.clone());
 
-                width = op.width(encoding);
                 key = op.id.into();
 
                 let idx = doc.ops_mut().load2(obj, op, &mut self.idx_range);
                 doc.ops_mut().insert(pos, &obj, idx);
 
+                width = idx.as_op2(doc.osd()).width(encoding);
                 cursor += width;
                 pos += 1;
             }

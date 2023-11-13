@@ -5,7 +5,8 @@ use crate::indexed_cache::IndexedCache;
 use crate::iter::{Keys, ListRange, MapRange, TopOps};
 use crate::op_tree::OpTreeIter;
 use crate::op_tree::{
-    self, FoundOpId, FoundOpWithPatchLog, FoundOpWithoutPatchLog, LastInsert, OpTree, OpsFound,
+    self, FoundOpId, FoundOpWithPatchLog, FoundOpWithoutPatchLog, LastInsert, OpTree,
+    OpTreeInternal, OpsFound,
 };
 use crate::parents::Parents;
 use crate::query::{ChangeVisibility, TreeQuery};
@@ -136,7 +137,15 @@ impl OpSetInternal {
         }
     }
 
-    pub(crate) fn seek_opid(
+    pub(crate) fn seek_idx(&self, idx: OpIdx, clock: Option<&Clock>) -> Option<FoundOpId<'_>> {
+        let obj = idx.as_op2(&self.osd).obj();
+        let (_typ, encoding) = self.type_and_encoding(obj)?;
+        self.trees
+            .get(obj)
+            .and_then(|tree| tree.internal.seek_idx(idx, encoding, clock, &self.osd))
+    }
+
+    pub(crate) fn seek_list_opid(
         &self,
         obj: &ObjId,
         id: OpId,
@@ -145,25 +154,16 @@ impl OpSetInternal {
         let (_typ, encoding) = self.type_and_encoding(obj)?;
         self.trees
             .get(obj)
-            .and_then(|tree| tree.internal.seek_opid(id, encoding, clock, &self.osd))
+            .and_then(|tree| tree.internal.seek_list_opid(id, encoding, clock, &self.osd))
     }
 
     pub(crate) fn parent_object(&self, obj: &ObjId, clock: Option<&Clock>) -> Option<Parent> {
-        let parent = self.trees.get(obj)?.parent?;
-        let found = self.seek_opid(&parent, obj.0, clock)?;
-        let prop = match found.op.elemid_or_key() {
-            Key::Map(m) => self
-                .osd
-                .props
-                .safe_get(m)
-                .map(|s| Prop::Map(s.to_string()))?,
-            Key::Seq(_) => Prop::Seq(found.index),
-        };
-        Some(Parent {
-            obj: parent,
-            prop,
-            visible: found.visible,
-        })
+        let idx = self.trees.get(obj)?.parent?;
+        let found = self.seek_idx(idx, clock)?;
+        let obj = *found.op.obj();
+        let prop = found.op.map_prop().unwrap_or(Prop::Seq(found.index));
+        let visible = found.visible;
+        Some(Parent { obj, prop, visible })
     }
 
     pub(crate) fn seek_ops_by_prop<'a>(
@@ -322,6 +322,14 @@ impl OpSetInternal {
         idx
     }
 
+    pub(crate) fn add_indexes(&mut self) {
+        for (_, tree) in self.trees.iter_mut() {
+            if tree.objtype.is_sequence() {
+                tree.add_index(&self.osd)
+            }
+        }
+    }
+
     #[tracing::instrument(skip(self, index))]
     pub(crate) fn insert(&mut self, index: usize, obj: &ObjId, idx: OpIdx) {
         let op = idx.as_op2(&self.osd);
@@ -329,10 +337,10 @@ impl OpSetInternal {
             self.trees.insert(
                 op.id().into(),
                 OpTree {
-                    internal: Default::default(),
+                    internal: OpTreeInternal::new(typ.is_sequence()),
                     objtype: *typ,
                     last_insert: None,
-                    parent: Some(*obj),
+                    parent: Some(idx),
                 },
             );
         }
@@ -352,10 +360,10 @@ impl OpSetInternal {
             self.trees.insert(
                 op.id().into(),
                 OpTree {
-                    internal: Default::default(),
+                    internal: OpTreeInternal::new(false),
                     objtype: *typ,
                     last_insert: None,
-                    parent: Some(*obj),
+                    parent: Some(idx),
                 },
             );
         }
