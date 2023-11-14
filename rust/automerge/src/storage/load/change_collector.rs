@@ -175,8 +175,8 @@ impl<'a> PartialChange<'a> {
         )?;
         deps.sort();
         let num_ops = self.ops.len() as u64;
-        self.ops.sort_by_key(|o| o.as_op2(osd).id().counter());
-        let converted_ops = self.ops.iter().map(|idx| op_as_actor_id(idx.as_op2(osd)));
+        self.ops.sort_by_key(|o| o.as_op(osd).id().counter());
+        let converted_ops = self.ops.iter().map(|idx| op_as_actor_id(idx.as_op(osd)));
         let actor = osd
             .actors
             .safe_get(self.actor)

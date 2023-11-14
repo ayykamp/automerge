@@ -1,5 +1,5 @@
 use crate::marks::MarkSet;
-pub(crate) use crate::op_set::{Op2, OpSetData};
+pub(crate) use crate::op_set::{Op, OpSetData};
 use crate::op_tree::node::OpIdx;
 use crate::patches::PatchLog;
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     Automerge,
 };
 use crate::{
-    types::{Key, ListEncoding, ObjMeta, OpId, Prop},
+    types::{Key, ListEncoding, ObjMeta, OpId, OpIds, Prop},
     ObjType, OpType,
 };
 use std::cmp::Ordering;
@@ -88,10 +88,10 @@ pub(crate) struct FoundOpWithoutPatchLog {
 
 #[derive(Default, Clone, Debug)]
 pub(crate) struct FoundOpWithPatchLog<'a> {
-    pub(crate) before: Option<Op2<'a>>,
+    pub(crate) before: Option<Op<'a>>,
     pub(crate) num_before: usize,
-    pub(crate) overwritten: Option<Op2<'a>>,
-    pub(crate) after: Option<Op2<'a>>,
+    pub(crate) overwritten: Option<Op<'a>>,
+    pub(crate) after: Option<Op<'a>>,
     pub(crate) succ: Vec<usize>,
     pub(crate) pos: usize,
     pub(crate) index: usize,
@@ -102,7 +102,8 @@ impl<'a> FoundOpWithPatchLog<'a> {
     pub(crate) fn log_patches(
         &self,
         obj: &ObjMeta,
-        op: Op2<'_>,
+        op: Op<'_>,
+        pred: &OpIds,
         doc: &Automerge,
         patch_log: &mut PatchLog,
     ) {
@@ -164,7 +165,7 @@ impl<'a> FoundOpWithPatchLog<'a> {
         } else if let Some(value) = op.get_increment_value() {
             if self.after.is_none() {
                 if let Some(counter) = self.overwritten {
-                    if op.overwrites(counter) {
+                    if pred.overwrites(counter.id()) {
                         patch_log.increment(obj.id, &key, value, *op.id());
                     }
                 }
@@ -218,14 +219,15 @@ impl OpTreeInternal {
     pub(crate) fn found_op_without_patch_log(
         &self,
         osd: &OpSetData,
-        op: Op2<'_>,
+        op: Op<'_>,
+        pred: &OpIds,
         mut pos: usize,
     ) -> FoundOpWithoutPatchLog {
         let mut iter = self.iter();
         let mut succ = vec![];
         let mut next = iter.nth(pos);
         while let Some(idx) = next {
-            let e = idx.as_op2(osd);
+            let e = idx.as_op(osd);
             if e.elemid_or_key() != op.elemid_or_key() {
                 break;
             }
@@ -234,7 +236,7 @@ impl OpTreeInternal {
                 break;
             }
 
-            if op.overwrites(e) {
+            if pred.overwrites(e.id()) {
                 succ.push(pos);
             }
 
@@ -248,7 +250,8 @@ impl OpTreeInternal {
     pub(crate) fn found_op_with_patch_log<'a>(
         &'a self,
         osd: &'a OpSetData,
-        op: Op2<'a>,
+        op: Op<'a>,
+        pred: &OpIds,
         mut pos: usize,
         index: usize,
         marks: Option<Arc<MarkSet>>,
@@ -262,7 +265,7 @@ impl OpTreeInternal {
         let mut succ = vec![];
         let mut next = iter.nth(pos);
         while let Some(idx) = next {
-            let e = idx.as_op2(osd);
+            let e = idx.as_op(osd);
             if e.elemid_or_key() != op.elemid_or_key() {
                 break;
             }
@@ -271,7 +274,7 @@ impl OpTreeInternal {
                 found = Some(pos);
             }
 
-            if op.overwrites(e) {
+            if pred.overwrites(e.id()) {
                 succ.push(pos);
 
                 if e.visible() {
@@ -306,16 +309,16 @@ impl OpTreeInternal {
 
     pub(crate) fn seek_map_op<'a>(
         &'a self,
-        op: Op2<'a>,
+        op: Op<'a>,
         clock: Option<&Clock>,
         osd: &'a OpSetData,
     ) -> Option<FoundOpId<'a>> {
         let pos = self.binary_search_by(osd, |o| o.key_cmp(op.key()).then_with(|| o.cmp(&op)));
         let mut iter = self.iter();
-        let op2 = iter.nth(pos).map(|idx| idx.as_op2(osd))?;
+        let op2 = iter.nth(pos).map(|idx| idx.as_op(osd))?;
         assert_eq!(op, op2);
         let index = 0;
-        for e in iter.map(|idx| idx.as_op2(osd)) {
+        for e in iter.map(|idx| idx.as_op(osd)) {
             if e.elemid_or_key() != op.elemid_or_key() {
                 break;
             }
@@ -342,7 +345,7 @@ impl OpTreeInternal {
         clock: Option<&Clock>,
         osd: &'a OpSetData,
     ) -> Option<FoundOpId<'a>> {
-        let op = idx.as_op2(osd);
+        let op = idx.as_op(osd);
         if op.key().is_map_key() {
             self.seek_map_op(op, clock, osd)
         } else {
@@ -360,10 +363,10 @@ impl OpTreeInternal {
         let query = self.search(query::OpIdSearch::opid(opid, encoding, clock), osd);
         let pos = query.found()?;
         let mut iter = self.iter();
-        let op = iter.nth(pos).map(|idx| idx.as_op2(osd))?;
+        let op = iter.nth(pos).map(|idx| idx.as_op(osd))?;
         let index = query.index_for(op);
         for idx in iter {
-            let e = idx.as_op2(osd);
+            let e = idx.as_op(osd);
 
             if e.elemid_or_key() != op.elemid_or_key() {
                 break;
@@ -386,7 +389,8 @@ impl OpTreeInternal {
 
     pub(crate) fn find_op_with_patch_log<'a>(
         &'a self,
-        op: Op2<'a>,
+        op: Op<'a>,
+        pred: &OpIds,
         encoding: ListEncoding,
         osd: &'a OpSetData,
     ) -> FoundOpWithPatchLog<'a> {
@@ -395,25 +399,26 @@ impl OpTreeInternal {
             let pos = query.pos();
             let index = query.index();
             let marks = query.marks(osd);
-            self.found_op_with_patch_log(osd, op, pos, index, marks)
+            self.found_op_with_patch_log(osd, op, pred, pos, index, marks)
         } else {
             let pos = self.binary_search_by(osd, |o| o.key_cmp(op.key()));
-            self.found_op_with_patch_log(osd, op, pos, 0, None)
+            self.found_op_with_patch_log(osd, op, pred, pos, 0, None)
         }
     }
 
     pub(crate) fn find_op_without_patch_log(
         &self,
-        op: Op2<'_>,
+        op: Op<'_>,
+        pred: &OpIds,
         osd: &OpSetData,
     ) -> FoundOpWithoutPatchLog {
         if let Key::Seq(_) = *op.key() {
             let query = self.search(query::SimpleOpIdSearch::op(op), osd);
             let pos = query.pos;
-            self.found_op_without_patch_log(osd, op, pos)
+            self.found_op_without_patch_log(osd, op, pred, pos)
         } else {
             let pos = self.binary_search_by(osd, |o| o.key_cmp(op.key()));
-            self.found_op_without_patch_log(osd, op, pos)
+            self.found_op_without_patch_log(osd, op, pred, pos)
         }
     }
 
@@ -443,7 +448,7 @@ impl OpTreeInternal {
         let mut ops = vec![];
         let mut ops_pos = vec![];
         while let Some(op) = next {
-            let op = op.as_op2(osd);
+            let op = op.as_op(osd);
             match op.key_cmp(&key) {
                 Ordering::Greater => {
                     break;
@@ -482,13 +487,13 @@ impl OpTreeInternal {
 
     fn binary_search_by<F>(&self, osd: &OpSetData, f: F) -> usize
     where
-        F: Fn(Op2<'_>) -> Ordering,
+        F: Fn(Op<'_>) -> Ordering,
     {
         let mut right = self.len();
         let mut left = 0;
         while left < right {
             let seq = (left + right) / 2;
-            if f(self.get(seq).unwrap().as_op2(osd)) == Ordering::Less {
+            if f(self.get(seq).unwrap().as_op(osd)) == Ordering::Less {
                 left = seq + 1;
             } else {
                 right = seq;
@@ -562,7 +567,7 @@ impl OpTreeInternal {
                 };
                 root.length += 1;
                 child.insert_into_non_full_node(insertion_index, element, osd);
-                root.index_insert(element.as_op2(osd))
+                root.index_insert(element.as_op(osd))
             } else {
                 root.insert_into_non_full_node(index, element, osd)
             }
@@ -630,14 +635,14 @@ impl PartialEq for OpTreeInternal {
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct OpsFound<'a> {
-    pub(crate) ops: Vec<Op2<'a>>,
+    pub(crate) ops: Vec<Op<'a>>,
     pub(crate) ops_pos: Vec<usize>,
     pub(crate) end_pos: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FoundOpId<'a> {
-    pub(crate) op: Op2<'a>,
+    pub(crate) op: Op<'a>,
     pub(crate) index: usize,
     pub(crate) visible: bool,
 }
@@ -645,18 +650,16 @@ pub(crate) struct FoundOpId<'a> {
 #[cfg(test)]
 mod tests {
     use crate::op_set::{OpIdx, OpSetData};
-    use crate::types::{Op, OpId, OpType, ROOT};
+    use crate::types::{OpBuilder, OpId, OpType, ROOT};
 
     use super::*;
 
     fn op(osd: &mut OpSetData) -> OpIdx {
         let zero = OpId::new(0, 0);
-        let op = Op {
+        let op = OpBuilder {
             id: zero,
             action: OpType::Put(0.into()),
             key: zero.into(),
-            succ: Default::default(),
-            pred: Default::default(),
             insert: false,
         };
         osd.push(ROOT.into(), op)

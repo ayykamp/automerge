@@ -1,11 +1,10 @@
 use crate::clock::Clock;
 use crate::exid::ExId;
 use crate::op_set::OpSetData;
-use crate::types::{self, ActorId, ElemId, Key, ListEncoding, ObjId, OpId, OpIds, OpType, Prop};
-use crate::value::{Counter, ScalarValue, Value};
+use crate::types::{self, ActorId, ElemId, Key, ListEncoding, ObjId, OpId, OpType, Prop};
+use crate::value::{ScalarValue, Value};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct OpIdx(u32);
@@ -19,8 +18,8 @@ impl OpIdx {
         self.0 as usize
     }
 
-    pub(crate) fn as_op2(self, osd: &OpSetData) -> Op2<'_> {
-        Op2 {
+    pub(crate) fn as_op(self, osd: &OpSetData) -> Op<'_> {
+        Op {
             idx: self.get(),
             osd,
         }
@@ -28,12 +27,11 @@ impl OpIdx {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct Op2<'a> {
+pub(crate) struct Op<'a> {
     idx: usize,
     osd: &'a OpSetData,
 }
 
-/*
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct OpDep<'a> {
     idx: usize,
@@ -45,63 +43,66 @@ impl<'a> OpDep<'a> {
         &self.osd.op_deps[self.idx]
     }
 
-    pub(crate) fn idx(&self) -> OpDepIdx {
-        OpDepIdx::new(self.idx)
+    /*
+        pub(crate) fn idx(&self) -> OpDepIdx {
+            OpDepIdx::new(self.idx)
+        }
+    */
+
+    pub(crate) fn pred(&self) -> Op<'a> {
+        self.raw().pred.as_op(self.osd)
     }
 
-    pub(crate) fn pred(&self) -> Op2<'a> {
-        self.raw().pred.as_op2(self.osd)
+    pub(crate) fn succ(&self) -> Op<'a> {
+        self.raw().succ.as_op(self.osd)
     }
 
-    pub(crate) fn succ(&self) -> Op2<'a> {
-        self.raw().succ.as_op2(self.osd)
-    }
+    /*
+        pub(crate) fn next_pred(&self) -> Option<OpDep<'a>> {
+            self.raw()
+                .next_pred
+                .as_ref()
+                .map(|next| next.as_opdep(self.osd))
+        }
 
-    pub(crate) fn next_pred(&self) -> Option<OpDep<'a>> {
-        self.raw()
-            .next_pred
-            .as_ref()
-            .map(|next| next.as_opdep(self.osd))
-    }
+        pub(crate) fn next_succ(&self) -> Option<OpDep<'a>> {
+            self.raw()
+                .next_succ
+                .as_ref()
+                .map(|next| next.as_opdep(self.osd))
+        }
 
-    pub(crate) fn next_succ(&self) -> Option<OpDep<'a>> {
-        self.raw()
-            .next_succ
-            .as_ref()
-            .map(|next| next.as_opdep(self.osd))
-    }
+        pub(crate) fn last_pred(&self) -> Option<OpDep<'a>> {
+            self.raw()
+                .last_pred
+                .as_ref()
+                .map(|next| next.as_opdep(self.osd))
+        }
 
-    pub(crate) fn last_pred(&self) -> Option<OpDep<'a>> {
-        self.raw()
-            .last_pred
-            .as_ref()
-            .map(|next| next.as_opdep(self.osd))
-    }
-
-    pub(crate) fn last_succ(&self) -> Option<OpDep<'a>> {
-        self.raw()
-            .last_succ
-            .as_ref()
-            .map(|next| next.as_opdep(self.osd))
-    }
+        pub(crate) fn last_succ(&self) -> Option<OpDep<'a>> {
+            self.raw()
+                .last_succ
+                .as_ref()
+                .map(|next| next.as_opdep(self.osd))
+        }
+    */
 }
-*/
 
-impl<'a> PartialEq for Op2<'a> {
+impl<'a> PartialEq for Op<'a> {
     fn eq(&self, other: &Self) -> bool {
         (std::ptr::eq(self.osd, other.osd) && self.idx == other.idx) || self.op() == other.op()
     }
 }
 
-impl<'a> Eq for Op2<'a> {}
+impl<'a> Eq for Op<'a> {}
 
-impl<'a> PartialOrd for Op2<'a> {
+impl<'a> PartialOrd for Op<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> Ord for Op2<'a> {
+impl<'a> Ord for Op<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         let c1 = self.id().counter();
         let c2 = other.id().counter();
@@ -109,9 +110,13 @@ impl<'a> Ord for Op2<'a> {
     }
 }
 
-impl<'a> Op2<'a> {
+impl<'a> Op<'a> {
     pub(crate) fn actor(&self) -> &ActorId {
         &self.osd.actors[self.op().id.actor()]
+    }
+
+    pub(crate) fn succ_iter(&self) -> impl Iterator<Item = Op<'a>> {
+        self.succ().filter(|op| !op.is_inc())
     }
 
     pub(crate) fn osd(&self) -> &'a OpSetData {
@@ -126,7 +131,11 @@ impl<'a> Op2<'a> {
         &self.osd.ops[self.idx]
     }
 
-    fn op(&self) -> &'a Op {
+    pub(crate) fn idx(&self) -> OpIdx {
+        OpIdx::new(self.idx)
+    }
+
+    fn op(&self) -> &'a OpBuilder {
         &self.osd.ops[self.idx].op
     }
 
@@ -154,20 +163,42 @@ impl<'a> Op2<'a> {
         self.op().is_noop(action)
     }
 
+    pub(crate) fn is_inc(&self) -> bool {
+        matches!(&self.op().action, OpType::Increment(_))
+    }
+
     pub(crate) fn visible_at(&self, clock: Option<&Clock>) -> bool {
-        self.op().visible_at(clock)
+        if let Some(clock) = clock {
+            if self.is_inc() || self.is_mark() {
+                false
+            } else {
+                clock.covers(&self.op().id) && !self.succ().any(|i| clock.covers(i.id()))
+            }
+        } else {
+            self.visible()
+        }
     }
 
     pub(crate) fn visible_or_mark(&self, clock: Option<&Clock>) -> bool {
-        self.op().visible_or_mark(clock)
+        if self.is_inc() {
+            false
+        } else if let Some(clock) = clock {
+            clock.covers(&self.op().id) && self.succ().all(|o| o.is_inc() || !clock.covers(o.id()))
+        } else if self.is_counter() {
+            self.succ().all(|op| op.is_inc())
+        } else {
+            self.succ().len() == 0
+        }
     }
 
     pub(crate) fn visible(&self) -> bool {
-        self.op().visible()
-    }
-
-    pub(crate) fn overwrites(&self, other: Op2<'_>) -> bool {
-        self.op().overwrites(other.op())
+        if self.is_inc() || self.is_mark() {
+            false
+        } else if self.is_counter() {
+            self.succ().all(|op| op.is_inc())
+        } else {
+            self.succ().len() == 0
+        }
     }
 
     pub(crate) fn elemid_or_key(&self) -> Key {
@@ -214,16 +245,29 @@ impl<'a> Op2<'a> {
         self.op().value()
     }
 
-    pub(crate) fn value_at(&self, clock: Option<&Clock>) -> Value<'a> {
-        self.op().value_at(clock)
+    pub(crate) fn inc_at(&self, clock: &Clock) -> i64 {
+        self.succ()
+            .filter_map(|o| {
+                if clock.covers(o.id()) {
+                    o.op().get_increment_value()
+                } else {
+                    None
+                }
+            })
+            .sum()
     }
 
-    pub(crate) fn scalar_value(&self) -> Option<&ScalarValue> {
-        self.op().scalar_value()
+    pub(crate) fn value_at(&self, clock: Option<&Clock>) -> Value<'a> {
+        if let Some(clock) = clock {
+            if let OpType::Put(ScalarValue::Counter(c)) = &self.op().action {
+                return Value::counter(c.start + self.inc_at(clock));
+            }
+        }
+        self.value()
     }
 
     pub(crate) fn tagged_value(&self, clock: Option<&Clock>) -> (Value<'a>, ExId) {
-        (self.op().value_at(clock), self.exid())
+        (self.value_at(clock), self.exid())
     }
 
     pub(crate) fn predates(&self, clock: &Clock) -> bool {
@@ -231,7 +275,7 @@ impl<'a> Op2<'a> {
     }
 
     pub(crate) fn was_deleted_before(&self, clock: &Clock) -> bool {
-        self.op().was_deleted_before(clock)
+        self.succ_iter().any(|op| clock.covers(op.id()))
     }
 
     pub(crate) fn exid(&self) -> ExId {
@@ -259,48 +303,44 @@ impl<'a> Op2<'a> {
         self.osd.key_cmp(&self.op().key, other)
     }
 
-    pub(crate) fn succ(&self) -> &OpIds {
-        &self.op().succ
+    pub(crate) fn succ_idx(&self) -> SuccIdxIter<'a> {
+        SuccIdxIter {
+            next: self.raw().succ,
+            len: self.raw().succ_len as usize,
+            offset: 0,
+            osd: self.osd,
+        }
     }
 
-    pub(crate) fn pred(&self) -> impl Iterator<Item = &OpId> + ExactSizeIterator {
-        self.op().pred.iter()
+    pub(crate) fn succ(&self) -> impl Iterator<Item = Op<'a>> + ExactSizeIterator {
+        self.succ_idx().map(|idx| idx.as_opdep(self.osd).succ())
     }
 
-    /*
-        pub(crate) fn succ_idx(&self) -> SuccIdxIter<'a> {
-            SuccIdxIter {
-                next: self.raw().succ,
-                osd: self.osd,
-            }
+    pub(crate) fn pred_idx(&self) -> PredIdxIter<'a> {
+        PredIdxIter {
+            next: self.raw().pred,
+            len: self.raw().pred_len as usize,
+            offset: 0,
+            osd: self.osd,
         }
+    }
 
-        pub(crate) fn succ_ids(&self) -> impl Iterator<Item = &'a OpId> {
-            self.succ_idx()
-                .map(|idx| idx.as_opdep(self.osd).succ().id())
-        }
-
-        pub(crate) fn pred_idx(&self) -> PredIdxIter<'a> {
-            PredIdxIter {
-                next: self.raw().pred,
-                osd: self.osd,
-            }
-        }
-
-        pub(crate) fn pred_ids(&self) -> impl Iterator<Item = &'a OpId> {
-            self.pred_idx()
-                .map(|idx| idx.as_opdep(self.osd).pred().id())
-        }
-    */
+    pub(crate) fn pred(&self) -> impl Iterator<Item = Op<'a>> + ExactSizeIterator {
+        self.pred_idx().map(|idx| idx.as_opdep(self.osd).pred())
+    }
 }
 
 pub(crate) struct PredIdxIter<'a> {
     next: Option<OpDepIdx>,
+    len: usize,
+    offset: usize,
     osd: &'a OpSetData,
 }
 
 pub(crate) struct SuccIdxIter<'a> {
     next: Option<OpDepIdx>,
+    len: usize,
+    offset: usize,
     osd: &'a OpSetData,
 }
 
@@ -309,10 +349,24 @@ impl<'a> Iterator for PredIdxIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(idx) = self.next {
             self.next = self.osd.op_deps[idx.get()].next_pred;
+            self.offset += 1;
+            assert!(self.offset <= self.len);
             Some(idx)
         } else {
             None
         }
+    }
+}
+
+impl<'a> ExactSizeIterator for PredIdxIter<'a> {
+    fn len(&self) -> usize {
+        self.len - self.offset
+    }
+}
+
+impl<'a> ExactSizeIterator for SuccIdxIter<'a> {
+    fn len(&self) -> usize {
+        self.len - self.offset
     }
 }
 
@@ -321,6 +375,8 @@ impl<'a> Iterator for SuccIdxIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(idx) = self.next {
             self.next = self.osd.op_deps[idx.get()].next_succ;
+            self.offset += 1;
+            assert!(self.offset <= self.len);
             Some(idx)
         } else {
             None
@@ -329,81 +385,17 @@ impl<'a> Iterator for SuccIdxIter<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Op {
-    pub(crate) id: OpId,
-    pub(crate) action: OpType,
-    pub(crate) key: Key,
-    pub(crate) succ: OpIds,
-    pub(crate) pred: OpIds,
-    pub(crate) insert: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OpBuilder {
     pub(crate) id: OpId,
     pub(crate) action: OpType,
     pub(crate) key: Key,
-    pub(crate) succ: OpIds,
-    pub(crate) pred: OpIds,
     pub(crate) insert: bool,
 }
 
-pub(crate) enum SuccIter<'a> {
-    Counter(HashSet<&'a OpId>, std::slice::Iter<'a, OpId>),
-    NonCounter(std::slice::Iter<'a, OpId>),
-}
-
-impl<'a> Iterator for SuccIter<'a> {
-    type Item = &'a OpId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Counter(set, iter) => {
-                for i in iter {
-                    if !set.contains(i) {
-                        return Some(i);
-                    }
-                }
-                None
-            }
-            Self::NonCounter(iter) => iter.next(),
-        }
-    }
-}
-
-impl Op {
-    pub(crate) fn succ_iter(&self) -> SuccIter<'_> {
-        if let OpType::Put(ScalarValue::Counter(c)) = &self.action {
-            let set = c
-                .increments
-                .iter()
-                .map(|(id, _)| id)
-                .collect::<HashSet<_>>();
-            SuccIter::Counter(set, self.succ.iter())
-        } else {
-            SuccIter::NonCounter(self.succ.iter())
-        }
-    }
-
-    pub(crate) fn increment(&mut self, n: i64, id: OpId) {
+impl OpBuilder {
+    pub(crate) fn increment(&mut self, n: i64) {
         if let OpType::Put(ScalarValue::Counter(c)) = &mut self.action {
             c.current += n;
-            c.increments.push((id, n));
-        }
-    }
-
-    pub(crate) fn remove_succ(&mut self, opid: &OpId, action: &OpType) {
-        self.succ.retain(|id| id != opid);
-        if let OpType::Put(ScalarValue::Counter(Counter {
-            current,
-            increments,
-            ..
-        })) = &mut self.action
-        {
-            if let OpType::Increment(n) = action {
-                *current -= *n;
-                increments.retain(|(id, _)| id != opid);
-            }
         }
     }
 
@@ -411,54 +403,8 @@ impl Op {
         self.action.to_str()
     }
 
-    pub(crate) fn visible(&self) -> bool {
-        if self.is_inc() || self.is_mark() {
-            false
-        } else if self.is_counter() {
-            self.succ.len() <= self.incs()
-        } else {
-            self.succ.is_empty()
-        }
-    }
-
-    pub(crate) fn visible_at(&self, clock: Option<&Clock>) -> bool {
-        if let Some(clock) = clock {
-            if self.is_inc() || self.is_mark() {
-                false
-            } else {
-                clock.covers(&self.id) && !self.succ_iter().any(|i| clock.covers(i))
-            }
-        } else {
-            self.visible()
-        }
-    }
-
-    pub(crate) fn visible_or_mark(&self, clock: Option<&Clock>) -> bool {
-        if self.is_inc() {
-            false
-        } else if let Some(clock) = clock {
-            clock.covers(&self.id) && !self.succ_iter().any(|i| clock.covers(i))
-        } else if self.is_counter() {
-            self.succ.len() <= self.incs()
-        } else {
-            self.succ.is_empty()
-        }
-    }
-
-    pub(crate) fn incs(&self) -> usize {
-        if let OpType::Put(ScalarValue::Counter(Counter { increments, .. })) = &self.action {
-            increments.len()
-        } else {
-            0
-        }
-    }
-
     pub(crate) fn is_delete(&self) -> bool {
         matches!(&self.action, OpType::Delete)
-    }
-
-    pub(crate) fn is_inc(&self) -> bool {
-        matches!(&self.action, OpType::Increment(_))
     }
 
     pub(crate) fn is_counter(&self) -> bool {
@@ -475,10 +421,6 @@ impl Op {
 
     pub(crate) fn is_list_op(&self) -> bool {
         matches!(&self.key, Key::Seq(_))
-    }
-
-    pub(crate) fn overwrites(&self, other: &Op) -> bool {
-        self.pred.iter().any(|i| i == &other.id)
     }
 
     pub(crate) fn elemid(&self) -> Option<ElemId> {
@@ -507,22 +449,6 @@ impl Op {
         }
     }
 
-    pub(crate) fn value_at(&self, clock: Option<&Clock>) -> Value<'_> {
-        if let Some(clock) = clock {
-            if let OpType::Put(ScalarValue::Counter(c)) = &self.action {
-                return Value::counter(c.value_at(clock));
-            }
-        }
-        self.value()
-    }
-
-    pub(crate) fn scalar_value(&self) -> Option<&ScalarValue> {
-        match &self.action {
-            OpType::Put(scalar) => Some(scalar),
-            _ => None,
-        }
-    }
-
     pub(crate) fn value(&self) -> Value<'_> {
         match &self.action {
             OpType::Make(obj_type) => Value::Object(*obj_type),
@@ -548,9 +474,11 @@ impl Op {
         }
     }
 
-    pub(crate) fn was_deleted_before(&self, clock: &Clock) -> bool {
-        self.succ_iter().any(|i| clock.covers(i))
-    }
+    /*
+        pub(crate) fn was_deleted_before(&self, clock: &Clock) -> bool {
+            self.succ_iter().any(|i| clock.covers(i))
+        }
+    */
 
     pub(crate) fn predates(&self, clock: &Clock) -> bool {
         clock.covers(&self.id)
@@ -569,14 +497,12 @@ impl OpDepIdx {
         self.0 as usize
     }
 
-    /*
-        pub(crate) fn as_opdep(self, osd: &OpSetData) -> OpDep<'_> {
-            OpDep {
-                idx: self.get(),
-                osd,
-            }
+    pub(crate) fn as_opdep(self, osd: &OpSetData) -> OpDep<'_> {
+        OpDep {
+            idx: self.get(),
+            osd,
         }
-    */
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -606,7 +532,9 @@ impl OpDepRaw {
 pub(crate) struct OpRaw {
     pub(crate) obj: ObjId,
     pub(crate) width: u32,
+    pub(crate) pred_len: u32,
+    pub(crate) succ_len: u32,
     pub(crate) pred: Option<OpDepIdx>,
     pub(crate) succ: Option<OpDepIdx>,
-    pub(crate) op: Op,
+    pub(crate) op: OpBuilder,
 }

@@ -1,4 +1,4 @@
-use crate::op_set::Op2;
+use crate::op_set::Op;
 use crate::op_tree::OpTreeNode;
 use crate::query::{Index, OpSetData, QueryResult, TreeQuery};
 use crate::types::{Clock, Key};
@@ -11,7 +11,7 @@ pub(crate) struct Prop<'a> {
     clock: Option<Clock>,
     key: Key,
     pub(crate) pos: usize,
-    pub(crate) ops: Vec<Op2<'a>>,
+    pub(crate) ops: Vec<Op<'a>>,
     pub(crate) ops_pos: Vec<usize>,
 }
 
@@ -29,7 +29,7 @@ impl<'a> Prop<'a> {
 
 impl<'a> TreeQuery<'a> for Prop<'a> {
     fn query_node(&mut self, child: &OpTreeNode, index: &Index, osd: &OpSetData) -> QueryResult {
-        let cmp = child.last().as_op2(osd).key_cmp(&self.key);
+        let cmp = child.last().as_op(osd).key_cmp(&self.key);
         if cmp == Ordering::Less
             || (cmp == Ordering::Equal && self.clock.is_none() && !index.has_visible(&self.key))
         {
@@ -40,7 +40,7 @@ impl<'a> TreeQuery<'a> for Prop<'a> {
         }
     }
 
-    fn query_element(&mut self, op: Op2<'a>) -> QueryResult {
+    fn query_element(&mut self, op: Op<'a>) -> QueryResult {
         match op.key_cmp(&self.key) {
             Ordering::Greater => QueryResult::Finish,
             Ordering::Equal => {

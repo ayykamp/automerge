@@ -1,9 +1,9 @@
 use crate::error::AutomergeError;
 use crate::marks::{MarkSet, MarkStateMachine};
-use crate::op_set::Op2;
+use crate::op_set::Op;
 use crate::op_tree::{OpTree, OpTreeNode};
 use crate::query::{Index, ListState, MarkMap, OpSetData, QueryResult, TreeQuery};
-use crate::types::{Clock, Key, ListEncoding, OpIds};
+use crate::types::{Clock, Key, ListEncoding};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ pub(crate) struct Nth<'a> {
     marks: Option<MarkMap<'a>>,
     // TODO: put osd in all queries - take out of API
     osd: &'a OpSetData,
-    pub(crate) ops: Vec<Op2<'a>>,
+    pub(crate) ops: Vec<Op<'a>>,
     pub(crate) ops_pos: Vec<usize>,
 }
 
@@ -52,9 +52,11 @@ impl<'a> Nth<'a> {
         marks.current().cloned()
     }
 
-    pub(crate) fn pred(&self) -> OpIds {
-        self.osd.sorted_opids(self.ops.iter().map(|op| *op.id()))
-    }
+    /*
+        pub(crate) fn pred(&self) -> OpIds {
+            self.osd.sorted_opids(self.ops.iter().map(|op| *op.id()))
+        }
+    */
 
     /// Get the key
     pub(crate) fn key(&self) -> Result<Key, AutomergeError> {
@@ -93,7 +95,7 @@ impl<'a> TreeQuery<'a> for Nth<'a> {
             if last.index == self.list_state.target().saturating_sub(1) {
                 if let Some(idx) = tree.internal.get(last.pos) {
                     self.list_state.seek(last);
-                    self.ops.push(idx.as_op2(osd));
+                    self.ops.push(idx.as_op(osd));
                     self.ops_pos.push(last.pos);
                     return true;
                 }
@@ -117,7 +119,7 @@ impl<'a> TreeQuery<'a> for Nth<'a> {
         }
     }
 
-    fn query_element(&mut self, op: Op2<'a>) -> QueryResult {
+    fn query_element(&mut self, op: Op<'a>) -> QueryResult {
         if op.insert() && self.list_state.done() {
             QueryResult::Finish
         } else {

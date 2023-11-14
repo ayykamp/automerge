@@ -1,5 +1,5 @@
 use crate::marks::Mark;
-use crate::op_set::Op2;
+use crate::op_set::Op;
 use crate::op_tree::OpSetData;
 use crate::query::{Index, ListState, OpTreeNode, QueryResult, TreeQuery};
 use crate::types::{ListEncoding, OpId, OpType};
@@ -66,10 +66,10 @@ impl<'a> TreeQuery<'a> for SeekMark<'a> {
         QueryResult::Descend
     }
 
-    fn query_element(&mut self, op: Op2<'a>) -> QueryResult {
+    fn query_element(&mut self, op: Op<'a>) -> QueryResult {
         match op.action() {
             OpType::MarkBegin(_, data) if op.id() == &self.id => {
-                if !op.succ().is_empty() {
+                if op.succ().len() > 0 {
                     return QueryResult::Finish;
                 }
                 self.found_begin = true;

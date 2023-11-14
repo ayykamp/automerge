@@ -237,7 +237,7 @@ mod tests {
         clock::ClockData,
         op_set::OpSetData,
         storage::{change::ChangeBuilder, convert::op_as_actor_id},
-        types::{Key, ObjId, Op, OpId, OpIds},
+        types::{Key, ObjId, OpBuilder, OpId},
         ActorId,
     };
 
@@ -340,12 +340,10 @@ mod tests {
 
             let actor_idx = self.index(actor);
             let ops = (0..num_new_ops)
-                .map(|opnum| Op {
+                .map(|opnum| OpBuilder {
                     id: OpId::new(start_op + opnum as u64, actor_idx),
                     action: crate::OpType::Put("value".into()),
                     key: Key::Map(key),
-                    succ: OpIds::empty(),
-                    pred: OpIds::empty(),
                     insert: false,
                 })
                 .collect::<Vec<_>>();
@@ -367,7 +365,7 @@ mod tests {
                     .with_actor(actor.clone())
                     .with_seq(*seq)
                     .with_timestamp(timestamp)
-                    .build(ops.iter().map(|op| op_as_actor_id(op.as_op2(&osd))))
+                    .build(ops.iter().map(|op| op_as_actor_id(op.as_op(&osd))))
                     .unwrap(),
             );
             *seq = seq.checked_add(1).unwrap();

@@ -20,8 +20,8 @@ use crate::transaction::{
     self, CommitOptions, Failure, Success, Transactable, Transaction, TransactionArgs,
 };
 use crate::types::{
-    ActorId, ChangeHash, Clock, ElemId, Export, Exportable, Key, MarkData, ObjId, ObjMeta, Op,
-    OpId, OpType, Value,
+    ActorId, ChangeHash, Clock, ElemId, Export, Exportable, Key, MarkData, ObjId, ObjMeta,
+    OpBuilder, OpId, OpIds, OpType, Value,
 };
 use crate::{hydrate, ScalarValue};
 use crate::{AutomergeError, Change, Cursor, ObjType, Prop, ReadDoc};
@@ -802,8 +802,8 @@ impl Automerge {
     ) -> Result<(), AutomergeError> {
         let ops = self.import_ops(&change);
         self.update_history(change, ops.len());
-        for (obj, op) in ops {
-            self.insert_op(&obj, op, patch_log)?;
+        for (obj, op, pred) in ops {
+            self.insert_op(&obj, op, &pred, patch_log)?;
         }
         Ok(())
     }
@@ -826,7 +826,7 @@ impl Automerge {
         None
     }
 
-    fn import_ops(&mut self, change: &Change) -> Vec<(ObjId, Op)> {
+    fn import_ops(&mut self, change: &Change) -> Vec<(ObjId, OpBuilder, OpIds)> {
         let actor = self.ops.osd.actors.cache(change.actor_id().clone());
         let mut actors = Vec::with_capacity(change.other_actor_ids().len() + 1);
         actors.push(actor);
@@ -864,7 +864,7 @@ impl Automerge {
                 let pred = self.ops.osd.sorted_opids(pred);
                 (
                     obj,
-                    Op {
+                    OpBuilder {
                         id,
                         action: OpType::from_action_and_value(
                             c.action,
@@ -873,10 +873,9 @@ impl Automerge {
                             c.expand,
                         ),
                         key,
-                        succ: Default::default(),
-                        pred,
                         insert: c.insert,
                     },
+                    pred,
                 )
             })
             .collect()
@@ -1184,12 +1183,8 @@ impl Automerge {
                 }
                 OpType::MarkEnd(_) => "/mark".to_string(),
             };
-            let pred: Vec<_> = op.pred().map(|id| self.to_short_string(*id)).collect();
-            let succ: Vec<_> = op
-                .succ()
-                .into_iter()
-                .map(|id| self.to_short_string(*id))
-                .collect();
+            let pred: Vec<_> = op.pred().map(|op| self.to_short_string(*op.id())).collect();
+            let succ: Vec<_> = op.succ().map(|op| self.to_short_string(*op.id())).collect();
             let insert = match op.insert() {
                 true => "t",
                 false => "f",
@@ -1227,20 +1222,21 @@ impl Automerge {
     pub(crate) fn insert_op(
         &mut self,
         obj: &ObjId,
-        op: Op,
+        op: OpBuilder,
+        pred: &OpIds,
         patch_log: &mut PatchLog,
     ) -> Result<(), AutomergeError> {
         let is_delete = op.is_delete();
         let idx = self.ops.load(*obj, op);
-        let op = idx.as_op2(&self.ops.osd);
+        let op = idx.as_op(&self.ops.osd);
 
         let (pos, succ) = if patch_log.is_active() {
             let obj = self.get_obj_meta(*obj)?;
-            let found = self.ops.find_op_with_patch_log(&obj, op);
-            found.log_patches(&obj, op, self, patch_log);
+            let found = self.ops.find_op_with_patch_log(&obj, op, pred);
+            found.log_patches(&obj, op, pred, self, patch_log);
             (found.pos, found.succ)
         } else {
-            let found = self.ops.find_op_without_patch_log(obj, op);
+            let found = self.ops.find_op_without_patch_log(obj, op, pred);
             (found.pos, found.succ)
         };
 

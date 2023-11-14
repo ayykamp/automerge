@@ -5,19 +5,19 @@ use crate::{
     convert,
     op_set::OpSetData,
     storage::AsChangeOp,
-    types::{ActorId, Key, MarkData, Op2, OpId, OpType, ScalarValue},
+    types::{ActorId, Key, MarkData, Op, OpId, OpType, ScalarValue},
 };
 
 /// Wrap an op in an implementation of `AsChangeOp` which represents actor IDs using a reference to
 /// the actor ID stored in the opset data.
 ///
 /// Note that the methods of `AsChangeOp` will panic if the actor is missing from the OpSetData
-pub(crate) fn op_as_actor_id(op: Op2<'_>) -> OpWithMetadata<'_> {
+pub(crate) fn op_as_actor_id(op: Op<'_>) -> OpWithMetadata<'_> {
     OpWithMetadata { op }
 }
 
 pub(crate) struct OpWithMetadata<'a> {
-    op: Op2<'a>,
+    op: Op<'a>,
 }
 
 impl<'a> OpWithMetadata<'a> {
@@ -45,7 +45,7 @@ impl<'a> convert::OpId<&'a ActorId> for OpIdWithMetadata<'a> {
 }
 
 pub(crate) struct PredWithMetadata<'a> {
-    op: Op2<'a>,
+    op: Op<'a>,
     offset: usize,
     osd: &'a OpSetData,
 }
@@ -60,10 +60,10 @@ impl<'a> Iterator for PredWithMetadata<'a> {
     type Item = OpIdWithMetadata<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(op) = self.op.pred().nth(self.offset) {
+        if let Some(opid) = self.op.pred().nth(self.offset).map(|o| *o.id()) {
             self.offset += 1;
             Some(OpIdWithMetadata {
-                opid: *op,
+                opid,
                 osd: self.osd,
             })
         } else {

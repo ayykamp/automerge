@@ -7,7 +7,7 @@ use crate::{
     columnar::Key as DocOpKey,
     op_set::{OpIdx, OpSet, OpSetData},
     storage::{change::Verified, Change as StoredChange, DocOp, Document},
-    types::{ChangeHash, ElemId, Key, ObjId, Op, OpId, OpIds, OpType},
+    types::{ChangeHash, ElemId, Key, ObjId, OpBuilder, OpId, OpIds, OpType},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -52,7 +52,8 @@ pub enum VerificationMode {
 
 #[derive(Clone, Debug)]
 struct NextDocOp {
-    op: Op,
+    op: OpBuilder,
+    succ: OpIds,
     key: Key,
     opid: OpId,
     obj: ObjId,
@@ -67,10 +68,16 @@ where
         let doc_op = op_res.map_err(|e| Error::ReadOp(Box::new(e)))?;
         let obj = doc_op.object;
         check_opid(&op_set.osd, *obj.opid())?;
-        let op = import_op(&mut op_set.osd, doc_op)?;
+        let (op, succ) = import_op(&mut op_set.osd, doc_op)?;
         let opid = op.id;
         let key = op.elemid_or_key();
-        Ok(Some(NextDocOp { op, opid, key, obj }))
+        Ok(Some(NextDocOp {
+            op,
+            succ,
+            opid,
+            key,
+            obj,
+        }))
     } else {
         Ok(None)
     }
@@ -107,10 +114,16 @@ pub(crate) fn reconstruct_opset<'a>(
     let mut state = ReconstructionState::new(doc)?;
     let mut iter_ops = doc.iter_ops();
     let mut next = next_op(&mut iter_ops, &mut state.op_set)?;
-    while let Some(NextDocOp { op, key, opid, obj }) = next {
+    while let Some(NextDocOp {
+        op,
+        succ,
+        key,
+        opid,
+        obj,
+    }) = next
+    {
         state.max_op = std::cmp::max(state.max_op, opid.counter());
 
-        let succ = op.succ.clone();
         let idx = state.op_set.load(obj, op);
 
         for id in &succ {
@@ -198,21 +211,16 @@ fn flush_ops(
 
     if next.is_none() || next_key != state.last_key || next_obj != state.last_obj {
         for (opid, preds) in &state.pred {
-            let del = Op {
+            let del = OpBuilder {
                 id: *opid,
-                pred: state
-                    .op_set
-                    .osd
-                    .sorted_opids(preds.iter().map(|p| *p.as_op2(&state.op_set.osd).id())),
                 insert: false,
-                succ: OpIds::empty(),
                 key: state.last_key.unwrap(),
                 action: OpType::Delete,
             };
             state.max_op = std::cmp::max(state.max_op, opid.counter());
             let del_idx = state.op_set.load(state.last_obj.unwrap(), del);
             for p in preds {
-                state.op_set.osd.add_succ2(*p, del_idx);
+                state.op_set.osd.add_dep(*p, del_idx);
             }
             state.change_collector.collect(*opid, del_idx)?;
         }
@@ -237,7 +245,7 @@ pub(crate) struct ReconOpSet {
     pub(crate) heads: BTreeSet<ChangeHash>,
 }
 
-fn import_op(osd: &mut OpSetData, op: DocOp) -> Result<Op, Error> {
+fn import_op(osd: &mut OpSetData, op: DocOp) -> Result<(OpBuilder, OpIds), Error> {
     let key = match op.key {
         DocOpKey::Prop(s) => Key::Map(osd.import_prop(s)),
         DocOpKey::Elem(ElemId(op)) => Key::Seq(ElemId(check_opid(osd, op)?)),
@@ -249,14 +257,16 @@ fn import_op(osd: &mut OpSetData, op: DocOp) -> Result<Op, Error> {
         }
     }
     let action = OpType::from_action_and_value(op.action, op.value, op.mark_name, op.expand);
-    Ok(Op {
-        id: check_opid(osd, op.id)?,
-        action,
-        key,
-        succ: osd.try_sorted_opids(op.succ).ok_or(Error::SuccOutOfOrder)?,
-        pred: OpIds::empty(),
-        insert: op.insert,
-    })
+    let succ = osd.try_sorted_opids(op.succ).ok_or(Error::SuccOutOfOrder)?;
+    Ok((
+        OpBuilder {
+            id: check_opid(osd, op.id)?,
+            action,
+            key,
+            insert: op.insert,
+        },
+        succ,
+    ))
 }
 
 /// We construct the OpSetData directly from the vector of actors which are encoded in the

@@ -4,7 +4,7 @@ use std::{
     mem,
 };
 
-use crate::op_set::Op2;
+use crate::op_set::Op;
 pub(crate) use crate::op_set::{OpIdx, OpSetData};
 use crate::query::{ChangeVisibility, Index, QueryResult, TreeQuery};
 pub const B: usize = 16;
@@ -38,7 +38,7 @@ impl OpTreeNode {
         Q: TreeQuery<'a>,
     {
         if let Some(idx) = self.elements.get(index) {
-            if query.query_element(idx.as_op2(m)) == QueryResult::Finish {
+            if query.query_element(idx.as_op(m)) == QueryResult::Finish {
                 return true;
             }
         }
@@ -51,7 +51,7 @@ impl OpTreeNode {
     {
         if self.is_leaf() {
             for idx in self.elements.iter() {
-                if query.query_element(idx.as_op2(m)) == QueryResult::Finish {
+                if query.query_element(idx.as_op(m)) == QueryResult::Finish {
                     return true;
                 }
             }
@@ -93,7 +93,7 @@ impl OpTreeNode {
                 }
             }
             for i in &self.elements {
-                index.insert(i.as_op2(osd));
+                index.insert(i.as_op(osd));
             }
             self.index = Some(index)
         }
@@ -128,7 +128,7 @@ impl OpTreeNode {
                 index.merge(c.add_index(osd))
             }
             for i in &self.elements {
-                index.insert(i.as_op2(osd));
+                index.insert(i.as_op(osd));
             }
             self.index = Some(index);
         }
@@ -143,13 +143,13 @@ impl OpTreeNode {
         }
     }
 
-    pub(crate) fn index_insert(&mut self, op: Op2<'_>) {
+    pub(crate) fn index_insert(&mut self, op: Op<'_>) {
         if let Some(index) = &mut self.index {
             index.insert(op)
         }
     }
 
-    pub(crate) fn index_remove(&mut self, op: Op2<'_>) {
+    pub(crate) fn index_remove(&mut self, op: Op<'_>) {
         if let Some(index) = &mut self.index {
             index.remove(op);
         }
@@ -163,7 +163,7 @@ impl OpTreeNode {
     ) {
         assert!(!self.is_full());
 
-        self.index_insert(element.as_op2(m));
+        self.index_insert(element.as_op(m));
 
         if self.is_leaf() {
             self.length += 1;
@@ -324,12 +324,12 @@ impl OpTreeNode {
                 let last_element = self.children[child_index - 1].elements.pop().unwrap();
                 assert!(!self.children[child_index - 1].elements.is_empty());
                 self.children[child_index - 1].length -= 1;
-                self.children[child_index - 1].index_remove(last_element.as_op2(osd));
+                self.children[child_index - 1].index_remove(last_element.as_op(osd));
 
                 let parent_element =
                     mem::replace(&mut self.elements[child_index - 1], last_element);
 
-                self.children[child_index].index_insert(parent_element.as_op2(osd));
+                self.children[child_index].index_insert(parent_element.as_op(osd));
                 self.children[child_index]
                     .elements
                     .insert(0, parent_element);
@@ -348,7 +348,7 @@ impl OpTreeNode {
                 .map_or(false, |c| c.elements.len() >= B)
             {
                 let first_element = self.children[child_index + 1].elements.remove(0);
-                self.children[child_index + 1].index_remove(first_element.as_op2(osd));
+                self.children[child_index + 1].index_remove(first_element.as_op(osd));
                 self.children[child_index + 1].length -= 1;
 
                 assert!(!self.children[child_index + 1].elements.is_empty());
@@ -356,7 +356,7 @@ impl OpTreeNode {
                 let parent_element = mem::replace(&mut self.elements[child_index], first_element);
 
                 self.children[child_index].length += 1;
-                self.children[child_index].index_insert(parent_element.as_op2(osd));
+                self.children[child_index].index_insert(parent_element.as_op(osd));
                 self.children[child_index].elements.push(parent_element);
 
                 if !self.children[child_index + 1].is_leaf() {
@@ -386,7 +386,7 @@ impl OpTreeNode {
         let original_len = self.len();
         if self.is_leaf() {
             let v = self.remove_from_leaf(index);
-            self.index_remove(v.as_op2(osd));
+            self.index_remove(v.as_op(osd));
             assert_eq!(original_len, self.len() + 1);
             debug_assert_eq!(self.check(), self.len());
             v
@@ -405,14 +405,14 @@ impl OpTreeNode {
                             min(child_index, self.elements.len() - 1),
                             osd,
                         );
-                        self.index_remove(v.as_op2(osd));
+                        self.index_remove(v.as_op(osd));
                         assert_eq!(original_len, self.len() + 1);
                         debug_assert_eq!(self.check(), self.len());
                         return v;
                     }
                     Ordering::Greater => {
                         let v = self.remove_from_internal_child(index, child_index, osd);
-                        self.index_remove(v.as_op2(osd));
+                        self.index_remove(v.as_op(osd));
                         assert_eq!(original_len, self.len() + 1);
                         debug_assert_eq!(self.check(), self.len());
                         return v;
@@ -432,7 +432,7 @@ impl OpTreeNode {
     fn merge(&mut self, middle: OpIdx, successor_sibling: OpTreeNode, osd: &OpSetData) {
         if let Some(index) = &mut self.index {
             if let Some(succ_index) = &successor_sibling.index {
-                index.insert(middle.as_op2(osd));
+                index.insert(middle.as_op(osd));
                 index.merge(succ_index);
             }
         }

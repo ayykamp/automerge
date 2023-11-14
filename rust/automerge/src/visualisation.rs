@@ -1,4 +1,4 @@
-use crate::types::{ObjId, Op2};
+use crate::types::{ObjId, Op};
 use fxhash::FxHasher;
 use std::fmt::Write;
 use std::{borrow::Cow, collections::HashMap, hash::BuildHasherDefault};
@@ -173,7 +173,7 @@ impl OpTable {
         let rows = node
             .elements
             .iter()
-            .map(|e| OpTableRow::create(e.as_op2(osd), obj, osd, actor_shorthands))
+            .map(|e| OpTableRow::create(e.as_op(osd), obj, osd, actor_shorthands))
             .collect();
         OpTable { rows }
     }
@@ -232,7 +232,7 @@ impl OpTableRow {
 
 impl OpTableRow {
     fn create(
-        op: Op2<'_>,
+        op: Op<'_>,
         obj: &ObjId,
         osd: &crate::op_set::OpSetData,
         actor_shorthands: &HashMap<usize, String>,
